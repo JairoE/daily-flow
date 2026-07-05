@@ -1,5 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -31,13 +31,46 @@ import {
 } from './src/storage/database';
 import { getLocalDateKey, isPastCheckInTime, normalizeCheckInTime } from './src/lib/dates';
 import { buildHistoryDays, summarizeTrends } from './src/lib/trends';
-import type { DailyEntry, HistoryDay, Profile, TabKey, TrendSummary } from './src/types';
+import type {
+  DailyEntry,
+  DailyEntryInput,
+  DailySymptoms,
+  HistoryDay,
+  Profile,
+  StoolType,
+  TabKey,
+  TrendSummary,
+} from './src/types';
 
 const tabs: { key: TabKey; label: string }[] = [
   { key: 'today', label: 'Today' },
   { key: 'history', label: 'History' },
   { key: 'trends', label: 'Trends' },
   { key: 'settings', label: 'Settings' },
+];
+
+const emptySymptoms: DailySymptoms = {
+  straining: false,
+  pain: false,
+  bloating: false,
+  incompleteEvacuation: false,
+};
+
+const symptomOptions: { key: keyof DailySymptoms; label: string }[] = [
+  { key: 'straining', label: 'Straining' },
+  { key: 'pain', label: 'Pain' },
+  { key: 'bloating', label: 'Bloating' },
+  { key: 'incompleteEvacuation', label: 'Incomplete evacuation' },
+];
+
+const stoolTypeOptions: { type: StoolType; label: string; detail: string }[] = [
+  { type: 1, label: 'Type 1', detail: 'Separate hard lumps' },
+  { type: 2, label: 'Type 2', detail: 'Lumpy sausage shape' },
+  { type: 3, label: 'Type 3', detail: 'Cracked sausage shape' },
+  { type: 4, label: 'Type 4', detail: 'Smooth soft shape' },
+  { type: 5, label: 'Type 5', detail: 'Soft blobs' },
+  { type: 6, label: 'Type 6', detail: 'Mushy pieces' },
+  { type: 7, label: 'Type 7', detail: 'Watery' },
 ];
 
 export default function App() {
@@ -119,16 +152,16 @@ export default function App() {
     }
   }
 
-  async function handleLog(hadBowelMovement: boolean) {
+  async function handleLog(input: DailyEntryInput) {
     if (!profile) {
       return;
     }
 
-    const entry = await upsertDailyEntry(today, hadBowelMovement);
+    const entry = await upsertDailyEntry(today, input);
     await refreshEntries();
     await syncNotificationsAfterEntry(profile, entry);
     setNotice(
-      hadBowelMovement
+      input.hadBowelMovement
         ? 'Logged for today.'
         : 'Logged for today. Gentle wellness language will stay non-medical.',
     );
@@ -254,7 +287,9 @@ export default function App() {
             <HistoryScreen historyDays={historyDays} />
           ) : null}
 
-          {activeTab === 'trends' ? <TrendsScreen trends={trends} /> : null}
+          {activeTab === 'trends' ? (
+            <TrendsScreen trends={trends} historyDays={historyDays} />
+          ) : null}
 
           {activeTab === 'settings' ? (
             <SettingsScreen
@@ -395,17 +430,78 @@ function TodayScreen({
 }: {
   entry: DailyEntry | null;
   includeTodayAsMissed: boolean;
-  onLog: (hadBowelMovement: boolean) => Promise<void>;
+  onLog: (input: DailyEntryInput) => Promise<void>;
 }) {
-  const [savingChoice, setSavingChoice] = useState<'yes' | 'no' | null>(null);
+  const [hadBowelMovement, setHadBowelMovement] = useState<boolean | null>(
+    entry?.hadBowelMovement ?? null,
+  );
+  const [stoolType, setStoolType] = useState<StoolType | null>(
+    entry?.stoolType ?? null,
+  );
+  const [symptoms, setSymptoms] = useState<DailySymptoms>(
+    entry?.symptoms ?? emptySymptoms,
+  );
+  const [laxativeUsed, setLaxativeUsed] = useState(
+    entry?.laxativeUsed ?? false,
+  );
+  const [laxativeNote, setLaxativeNote] = useState(entry?.laxativeNote ?? '');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
-  async function handlePress(value: boolean) {
-    setSavingChoice(value ? 'yes' : 'no');
+  useEffect(() => {
+    setHadBowelMovement(entry?.hadBowelMovement ?? null);
+    setStoolType(entry?.stoolType ?? null);
+    setSymptoms(entry?.symptoms ?? emptySymptoms);
+    setLaxativeUsed(entry?.laxativeUsed ?? false);
+    setLaxativeNote(entry?.laxativeNote ?? '');
+    setError('');
+  }, [entry]);
+
+  function handleChoice(value: boolean) {
+    setHadBowelMovement(value);
+    setError('');
+
+    if (!value) {
+      setStoolType(null);
+    }
+  }
+
+  function toggleSymptom(key: keyof DailySymptoms, value: boolean) {
+    setSymptoms((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  }
+
+  async function handleSave() {
+    if (hadBowelMovement === null) {
+      setError('Choose Yes or No first.');
+      return;
+    }
+
+    if (hadBowelMovement && stoolType === null) {
+      setError('Choose a Bristol stool type.');
+      return;
+    }
+
+    if (laxativeNote.trim().length > 160) {
+      setError('Keep the note to 160 characters or fewer.');
+      return;
+    }
+
+    setSaving(true);
+    setError('');
 
     try {
-      await onLog(value);
+      await onLog({
+        hadBowelMovement,
+        stoolType: hadBowelMovement ? stoolType : null,
+        symptoms,
+        laxativeUsed,
+        laxativeNote,
+      });
     } finally {
-      setSavingChoice(null);
+      setSaving(false);
     }
   }
 
@@ -438,42 +534,117 @@ function TodayScreen({
         />
         <View style={styles.answerRow}>
           <Pressable
-            onPress={() => handlePress(true)}
-            disabled={savingChoice !== null}
+            onPress={() => handleChoice(true)}
+            disabled={saving}
             style={[
               styles.answerButton,
               styles.yesButton,
-              entry?.hadBowelMovement === true && styles.selectedYesButton,
+              hadBowelMovement === true && styles.selectedYesButton,
             ]}
           >
             <Text
               style={[
                 styles.answerButtonText,
-                entry?.hadBowelMovement === true && styles.selectedAnswerText,
+                hadBowelMovement === true && styles.selectedAnswerText,
               ]}
             >
-              {savingChoice === 'yes' ? 'Saving...' : 'Yes'}
+              Yes
             </Text>
           </Pressable>
           <Pressable
-            onPress={() => handlePress(false)}
-            disabled={savingChoice !== null}
+            onPress={() => handleChoice(false)}
+            disabled={saving}
             style={[
               styles.answerButton,
               styles.noButton,
-              entry?.hadBowelMovement === false && styles.selectedNoButton,
+              hadBowelMovement === false && styles.selectedNoButton,
             ]}
           >
             <Text
               style={[
                 styles.answerButtonText,
-                entry?.hadBowelMovement === false && styles.selectedAnswerText,
+                hadBowelMovement === false && styles.selectedAnswerText,
               ]}
             >
-              {savingChoice === 'no' ? 'Saving...' : 'No'}
+              No
             </Text>
           </Pressable>
         </View>
+
+        {hadBowelMovement ? (
+          <View style={styles.inlineSection}>
+            <Text style={styles.sectionLabel}>Bristol stool type</Text>
+            <View style={styles.stoolGrid}>
+              {stoolTypeOptions.map((option) => (
+                <Pressable
+                  key={option.type}
+                  onPress={() => {
+                    setStoolType(option.type);
+                    setError('');
+                  }}
+                  style={[
+                    styles.stoolButton,
+                    stoolType === option.type && styles.selectedStoolButton,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.stoolButtonLabel,
+                      stoolType === option.type && styles.selectedStoolText,
+                    ]}
+                  >
+                    {option.label}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.stoolButtonDetail,
+                      stoolType === option.type && styles.selectedStoolText,
+                    ]}
+                  >
+                    {option.detail}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        ) : null}
+
+        <View style={styles.inlineSection}>
+          <Text style={styles.sectionLabel}>Symptoms today</Text>
+          {symptomOptions.map((option) => (
+            <ToggleRow
+              key={option.key}
+              label={option.label}
+              value={symptoms[option.key]}
+              onValueChange={(value) => toggleSymptom(option.key, value)}
+            />
+          ))}
+        </View>
+
+        <View style={styles.inlineSection}>
+          <Text style={styles.sectionLabel}>Laxative or context</Text>
+          <ToggleRow
+            label="Laxative used"
+            value={laxativeUsed}
+            onValueChange={setLaxativeUsed}
+          />
+          <LabeledInput
+            label="Short note"
+            value={laxativeNote}
+            placeholder="Optional, 160 characters"
+            maxLength={160}
+            multiline
+            onChangeText={setLaxativeNote}
+          />
+        </View>
+
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+        <PrimaryButton
+          label={saving ? 'Saving...' : 'Save today'}
+          disabled={saving}
+          onPress={handleSave}
+        />
       </View>
 
       <View style={styles.wellnessPanel}>
@@ -488,59 +659,438 @@ function TodayScreen({
 }
 
 function HistoryScreen({ historyDays }: { historyDays: HistoryDay[] }) {
+  const chronologicalDays = [...historyDays].reverse();
+  const gapLabels = buildHistoryGapLabels(chronologicalDays);
+
   return (
-    <View style={styles.panel}>
-      <Text style={styles.panelTitle}>Recent history</Text>
-      {historyDays.map((day) => (
-        <View key={day.localDate} style={styles.historyRow}>
-          <View style={styles.historyDateBlock}>
-            <Text style={styles.historyLabel}>{day.label}</Text>
-            <Text style={styles.historyDate}>{day.localDate}</Text>
+    <View>
+      <View style={styles.panel}>
+        <Text style={styles.panelTitle}>30-day overview</Text>
+        <View style={styles.historyStrip}>
+          {chronologicalDays.map((day) => (
+            <HistoryTile key={day.localDate} day={day} />
+          ))}
+        </View>
+        {gapLabels.length ? (
+          <View style={styles.gapList}>
+            {gapLabels.map((gap) => (
+              <Text key={`${gap.startDate}-${gap.endDate}`} style={styles.gapText}>
+                {gap.length} day gap: {gap.startLabel} to {gap.endLabel}
+              </Text>
+            ))}
           </View>
-          <StatusPill
-            label={statusText(day.status)}
-            tone={statusTone(day.status)}
+        ) : (
+          <Text style={styles.chartEmptyText}>No 2+ day gaps in this window.</Text>
+        )}
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.panelTitle}>Recent history</Text>
+        {historyDays.map((day) => (
+          <View key={day.localDate} style={styles.historyRow}>
+            <View style={styles.historyDateBlock}>
+              <Text style={styles.historyLabel}>{day.label}</Text>
+              <Text style={styles.historyDate}>{day.localDate}</Text>
+              <Text style={styles.historyDetail}>{historyDetailText(day)}</Text>
+            </View>
+            <StatusPill
+              label={statusText(day.status)}
+              tone={statusTone(day.status)}
+            />
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function TrendsScreen({
+  trends,
+  historyDays,
+}: {
+  trends: TrendSummary;
+  historyDays: HistoryDay[];
+}) {
+  return (
+    <View>
+      <View style={styles.panel}>
+        <Text style={styles.panelTitle}>Doctor summary</Text>
+        <Text style={styles.bodyText}>For discussion with your clinician.</Text>
+        <View style={styles.summaryGrid}>
+          <SummaryMetric
+            label="BM days"
+            value={`${trends.bowelMovementDaysLast30}`}
+            detail="of 30 days"
+          />
+          <SummaryMetric
+            label="Average"
+            value={`${trends.averagePerWeekLast30}`}
+            detail="per week"
+          />
+          <SummaryMetric
+            label="Current gap"
+            value={formatDaysValue(trends.currentGapDays)}
+            detail={pluralize(trends.currentGapDays ?? 0, 'day')}
+          />
+          <SummaryMetric
+            label="Longest gap"
+            value={`${trends.longestGapDays}`}
+            detail={pluralize(trends.longestGapDays, 'day')}
+          />
+          <SummaryMetric
+            label="Check-ins"
+            value={`${trends.checkInRateLast30}%`}
+            detail="completed"
+          />
+          <SummaryMetric
+            label="Common Bristol"
+            value={
+              trends.mostCommonBristolType
+                ? `${trends.mostCommonBristolType}`
+                : '-'
+            }
+            detail={
+              trends.mostCommonBristolType
+                ? 'most logged type'
+                : 'not enough detail'
+            }
+          />
+          <SummaryMetric
+            label="Symptoms"
+            value={`${trends.symptomBurdenDays}`}
+            detail="days with any"
+          />
+          <SummaryMetric
+            label="Laxative"
+            value={`${trends.laxativeUseDays}`}
+            detail="days logged"
           />
         </View>
+      </View>
+
+      <ChartPanel title="Weekly frequency">
+        <FrequencyBarChart trends={trends} />
+      </ChartPanel>
+
+      <ChartPanel title="Rolling 7-day count">
+        <RollingTrendChart trends={trends} />
+      </ChartPanel>
+
+      <ChartPanel title="Days between bowel movements">
+        <IntervalChart trends={trends} />
+      </ChartPanel>
+
+      <ChartPanel title="Bristol stool form">
+        <BristolDistributionChart trends={trends} />
+      </ChartPanel>
+
+      <ChartPanel title="Symptom burden">
+        <SymptomBurdenChart trends={trends} />
+      </ChartPanel>
+
+      <ChartPanel title="Laxative timeline">
+        <LaxativeTimeline historyDays={historyDays} />
+      </ChartPanel>
+
+      <ChartPanel title="Data completeness">
+        <DataCompletenessChart trends={trends} />
+      </ChartPanel>
+    </View>
+  );
+}
+
+function HistoryTile({ day }: { day: HistoryDay }) {
+  const selectedSymptomCount = day.entry ? symptomCount(day.entry.symptoms) : 0;
+
+  return (
+    <View
+      accessible
+      accessibilityLabel={`${day.label}, ${statusText(day.status)}${day.entry?.stoolType ? `, Bristol ${day.entry.stoolType}` : ''}`}
+      style={[styles.historyTile, historyTileStyle(day.status)]}
+    >
+      <Text style={styles.historyTileDate}>{Number(day.localDate.slice(-2))}</Text>
+      <Text style={styles.historyTileStatus}>{statusAbbreviation(day.status)}</Text>
+      {day.entry?.stoolType ? (
+        <Text style={styles.historyTileMeta}>B{day.entry.stoolType}</Text>
+      ) : null}
+      <View style={styles.tileMarkerRow}>
+        {selectedSymptomCount > 0 ? (
+          <Text style={styles.tileMarker}>S</Text>
+        ) : null}
+        {day.entry?.laxativeUsed ? <Text style={styles.tileMarker}>L</Text> : null}
+      </View>
+    </View>
+  );
+}
+
+function ChartPanel({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <View style={styles.panel}>
+      <Text style={styles.panelTitle}>{title}</Text>
+      {children}
+    </View>
+  );
+}
+
+function FrequencyBarChart({ trends }: { trends: TrendSummary }) {
+  const maxValue = Math.max(
+    7,
+    ...trends.weeklyFrequency.map((point) => point.count),
+  );
+
+  if (!trends.weeklyFrequency.length) {
+    return <EmptyChart />;
+  }
+
+  return (
+    <View>
+      <View style={styles.referenceRow}>
+        <Text style={styles.chartMeta}>3/week reference</Text>
+        <View style={styles.barTrack}>
+          <View
+            style={[
+              styles.referenceFill,
+              { width: `${Math.min(100, (3 / maxValue) * 100)}%` },
+            ]}
+          />
+        </View>
+      </View>
+      {trends.weeklyFrequency.map((point) => (
+        <BarRow
+          key={`${point.startDate}-${point.endDate}`}
+          label={point.label}
+          value={point.count}
+          maxValue={maxValue}
+        />
       ))}
     </View>
   );
 }
 
-function TrendsScreen({ trends }: { trends: TrendSummary }) {
+function RollingTrendChart({ trends }: { trends: TrendSummary }) {
+  const maxValue = Math.max(1, ...trends.rolling7.map((point) => point.count));
+
+  if (!trends.rolling7.length) {
+    return <EmptyChart />;
+  }
+
   return (
     <View>
-      <View style={styles.trendGrid}>
-        <TrendCard label="Last 7 days" value={`${trends.yesLast7}`} detail="yes logs" />
-        <TrendCard label="Last 30 days" value={`${trends.yesLast30}`} detail="yes logs" />
-        <TrendCard
-          label="Since last yes"
-          value={
-            trends.daysSinceLastYes === null
-              ? '—'
-              : `${trends.daysSinceLastYes}`
-          }
-          detail={trends.daysSinceLastYes === 1 ? 'day' : 'days'}
-        />
-        <TrendCard
-          label="7-day check-ins"
-          value={`${trends.checkInRateLast7}%`}
-          detail="completed"
-        />
+      <View style={styles.sparkBars}>
+        {trends.rolling7.map((point) => (
+          <View
+            key={point.localDate}
+            accessibilityLabel={`${point.label}: ${point.count} in rolling 7 days`}
+            style={[
+              styles.sparkBar,
+              {
+                height: Math.max(4, Math.round((point.count / maxValue) * 58)),
+              },
+            ]}
+          />
+        ))}
       </View>
-      <View style={styles.panel}>
-        <Text style={styles.panelTitle}>Missed check-ins</Text>
-        <View style={styles.statLine}>
-          <Text style={styles.bodyText}>Last 7 days</Text>
-          <Text style={styles.statValue}>{trends.missedLast7}</Text>
-        </View>
-        <View style={styles.statLine}>
-          <Text style={styles.bodyText}>Last 30 days</Text>
-          <Text style={styles.statValue}>{trends.missedLast30}</Text>
-        </View>
+      <View style={styles.chartAxis}>
+        <Text style={styles.chartMeta}>30 days ago</Text>
+        <Text style={styles.chartMeta}>Today</Text>
       </View>
     </View>
   );
+}
+
+function IntervalChart({ trends }: { trends: TrendSummary }) {
+  const intervals = trends.intervals.filter(
+    (point) => point.daysSincePrevious !== null,
+  );
+  const maxValue = Math.max(
+    1,
+    ...intervals.map((point) => point.daysSincePrevious ?? 0),
+  );
+
+  if (!intervals.length) {
+    return <EmptyChart />;
+  }
+
+  return (
+    <View>
+      {intervals.map((point) => (
+        <BarRow
+          key={point.localDate}
+          label={point.label}
+          value={point.daysSincePrevious ?? 0}
+          maxValue={maxValue}
+          suffix="d"
+        />
+      ))}
+    </View>
+  );
+}
+
+function BristolDistributionChart({ trends }: { trends: TrendSummary }) {
+  const maxValue = Math.max(
+    1,
+    ...trends.bristolDistribution.map((item) => item.count),
+  );
+  const total = trends.bristolDistribution.reduce(
+    (sum, item) => sum + item.count,
+    0,
+  );
+
+  if (total === 0) {
+    return <EmptyChart />;
+  }
+
+  return (
+    <View>
+      {trends.bristolDistribution.map((item) => (
+        <View key={item.type} style={styles.chartRow}>
+          <Text style={styles.chartLabel}>Type {item.type}</Text>
+          <View style={styles.barTrack}>
+            <View
+              style={[
+                styles.barFill,
+                bristolBarStyle(item.type),
+                { width: `${(item.count / maxValue) * 100}%` },
+              ]}
+            />
+          </View>
+          <Text style={styles.chartValue}>{item.count}</Text>
+        </View>
+      ))}
+      <Text style={styles.chartMeta}>
+        Types 1-2 hard/lumpy, 3-4 formed, 5-7 loose/watery.
+      </Text>
+    </View>
+  );
+}
+
+function SymptomBurdenChart({ trends }: { trends: TrendSummary }) {
+  const symptomRows = symptomOptions.map((option) => ({
+    label: option.label,
+    value: trends.symptomCounts[option.key],
+  }));
+  const total = symptomRows.reduce((sum, row) => sum + row.value, 0);
+  const maxValue = Math.max(1, ...symptomRows.map((row) => row.value));
+
+  if (total === 0) {
+    return <EmptyChart />;
+  }
+
+  return (
+    <View>
+      <Text style={styles.chartMeta}>
+        {trends.symptomBurdenDays} days with one or more symptoms.
+      </Text>
+      {symptomRows.map((row) => (
+        <BarRow
+          key={row.label}
+          label={row.label}
+          value={row.value}
+          maxValue={maxValue}
+        />
+      ))}
+    </View>
+  );
+}
+
+function LaxativeTimeline({ historyDays }: { historyDays: HistoryDay[] }) {
+  const chronologicalDays = [...historyDays].reverse();
+  const hasDetails = chronologicalDays.some(
+    (day) => day.entry?.detailsRecorded,
+  );
+
+  if (!hasDetails) {
+    return <EmptyChart />;
+  }
+
+  return (
+    <View>
+      <View style={styles.timelineStrip}>
+        {chronologicalDays.map((day) => (
+          <View key={day.localDate} style={styles.timelineDay}>
+            <View
+              style={[
+                styles.timelineDot,
+                day.entry?.laxativeUsed && styles.timelineDotActive,
+              ]}
+            />
+          </View>
+        ))}
+      </View>
+      <View style={styles.chartAxis}>
+        <Text style={styles.chartMeta}>30 days ago</Text>
+        <Text style={styles.chartMeta}>{laxativeNoteSummary(historyDays)}</Text>
+        <Text style={styles.chartMeta}>Today</Text>
+      </View>
+    </View>
+  );
+}
+
+function DataCompletenessChart({ trends }: { trends: TrendSummary }) {
+  const denominator = trends.completedDaysLast30 + trends.missedLast30;
+  const completedWidth =
+    denominator === 0 ? 0 : (trends.completedDaysLast30 / denominator) * 100;
+
+  return (
+    <View>
+      <View style={styles.completionTrack}>
+        <View
+          style={[
+            styles.completionFill,
+            { width: `${Math.min(100, completedWidth)}%` },
+          ]}
+        />
+      </View>
+      <View style={styles.statLine}>
+        <Text style={styles.bodyText}>Answered days</Text>
+        <Text style={styles.statValue}>{trends.completedDaysLast30}</Text>
+      </View>
+      <View style={styles.statLine}>
+        <Text style={styles.bodyText}>Missed check-ins</Text>
+        <Text style={styles.statValue}>{trends.missedLast30}</Text>
+      </View>
+    </View>
+  );
+}
+
+function BarRow({
+  label,
+  value,
+  maxValue,
+  suffix = '',
+}: {
+  label: string;
+  value: number;
+  maxValue: number;
+  suffix?: string;
+}) {
+  return (
+    <View style={styles.chartRow}>
+      <Text style={styles.chartLabel}>{label}</Text>
+      <View style={styles.barTrack}>
+        <View
+          style={[
+            styles.barFill,
+            { width: `${maxValue === 0 ? 0 : (value / maxValue) * 100}%` },
+          ]}
+        />
+      </View>
+      <Text style={styles.chartValue}>
+        {value}
+        {suffix}
+      </Text>
+    </View>
+  );
+}
+
+function EmptyChart() {
+  return <Text style={styles.chartEmptyText}>More check-ins will fill this in.</Text>;
 }
 
 function SettingsScreen({
@@ -633,12 +1183,16 @@ function LabeledInput({
   onChangeText,
   placeholder,
   keyboardType,
+  maxLength,
+  multiline,
 }: {
   label: string;
   value: string;
   onChangeText: (value: string) => void;
   placeholder?: string;
   keyboardType?: 'default' | 'numbers-and-punctuation';
+  maxLength?: number;
+  multiline?: boolean;
 }) {
   return (
     <View style={styles.inputGroup}>
@@ -649,7 +1203,10 @@ function LabeledInput({
         placeholder={placeholder}
         placeholderTextColor={palette.muted}
         keyboardType={keyboardType}
+        maxLength={maxLength}
+        multiline={multiline}
         onChangeText={onChangeText}
+        textAlignVertical={multiline ? 'top' : 'center'}
       />
     </View>
   );
@@ -713,7 +1270,7 @@ function StatusPill({
   );
 }
 
-function TrendCard({
+function SummaryMetric({
   label,
   value,
   detail,
@@ -723,12 +1280,140 @@ function TrendCard({
   detail: string;
 }) {
   return (
-    <View style={styles.trendCard}>
-      <Text style={styles.trendLabel}>{label}</Text>
-      <Text style={styles.trendValue}>{value}</Text>
-      <Text style={styles.trendDetail}>{detail}</Text>
+    <View style={styles.summaryMetric}>
+      <Text style={styles.summaryLabel}>{label}</Text>
+      <Text style={styles.summaryValue}>{value}</Text>
+      <Text style={styles.summaryDetail}>{detail}</Text>
     </View>
   );
+}
+
+function buildHistoryGapLabels(chronologicalDays: HistoryDay[]) {
+  const gaps: {
+    startDate: string;
+    endDate: string;
+    startLabel: string;
+    endLabel: string;
+    length: number;
+  }[] = [];
+  let activeGap: HistoryDay[] = [];
+  let seenYes = false;
+
+  for (const day of chronologicalDays) {
+    if (day.status === 'pending') {
+      continue;
+    }
+
+    if (day.status === 'yes') {
+      if (seenYes && activeGap.length >= 2) {
+        const first = activeGap[0];
+        const last = activeGap[activeGap.length - 1];
+        gaps.push({
+          startDate: first.localDate,
+          endDate: last.localDate,
+          startLabel: first.label,
+          endLabel: last.label,
+          length: activeGap.length,
+        });
+      }
+
+      seenYes = true;
+      activeGap = [];
+      continue;
+    }
+
+    if (seenYes && (day.status === 'no' || day.status === 'missed')) {
+      activeGap.push(day);
+    }
+  }
+
+  if (seenYes && activeGap.length >= 2) {
+    const first = activeGap[0];
+    const last = activeGap[activeGap.length - 1];
+    gaps.push({
+      startDate: first.localDate,
+      endDate: last.localDate,
+      startLabel: first.label,
+      endLabel: last.label,
+      length: activeGap.length,
+    });
+  }
+
+  return gaps;
+}
+
+function symptomCount(symptoms: DailySymptoms): number {
+  return symptomOptions.filter((option) => symptoms[option.key]).length;
+}
+
+function symptomNames(symptoms: DailySymptoms): string[] {
+  return symptomOptions
+    .filter((option) => symptoms[option.key])
+    .map((option) => option.label);
+}
+
+function historyDetailText(day: HistoryDay): string {
+  if (!day.entry) {
+    return day.status === 'pending' ? 'Waiting for check-in' : 'No check-in';
+  }
+
+  if (!day.entry.detailsRecorded) {
+    return 'Earlier yes/no log';
+  }
+
+  const parts: string[] = [];
+
+  if (day.entry.stoolType) {
+    parts.push(`Bristol ${day.entry.stoolType}`);
+  }
+
+  const symptoms = symptomNames(day.entry.symptoms);
+
+  if (symptoms.length) {
+    parts.push(symptoms.join(', '));
+  }
+
+  if (day.entry.laxativeUsed) {
+    parts.push('Laxative used');
+  }
+
+  if (day.entry.laxativeNote.trim()) {
+    parts.push(`Note: ${day.entry.laxativeNote.trim()}`);
+  }
+
+  return parts.length ? parts.join(' · ') : 'No added details';
+}
+
+function laxativeNoteSummary(historyDays: HistoryDay[]): string {
+  const count = historyDays.filter(
+    (day) => day.entry?.detailsRecorded && day.entry.laxativeNote.trim(),
+  ).length;
+
+  return count === 1 ? '1 note' : `${count} notes`;
+}
+
+function formatDaysValue(value: number | null): string {
+  return value === null ? '-' : `${value}`;
+}
+
+function pluralize(value: number, singular: string): string {
+  return value === 1 ? singular : `${singular}s`;
+}
+
+function statusAbbreviation(status: HistoryDay['status']): string {
+  if (status === 'yes') {
+    return 'Y';
+  }
+
+  if (status === 'no') {
+    return 'N';
+  }
+
+  if (status === 'missed') {
+    return 'M';
+  }
+
+  return 'P';
 }
 
 function statusText(status: HistoryDay['status']): string {
@@ -779,6 +1464,27 @@ function statusPillTextStyle(tone: 'green' | 'coral' | 'amber' | 'blue') {
     amber: styles.amberPillText,
     blue: styles.bluePillText,
   }[tone];
+}
+
+function historyTileStyle(status: HistoryDay['status']) {
+  return {
+    yes: styles.greenTile,
+    no: styles.coralTile,
+    missed: styles.amberTile,
+    pending: styles.blueTile,
+  }[status];
+}
+
+function bristolBarStyle(type: StoolType) {
+  if (type <= 2) {
+    return styles.coralBar;
+  }
+
+  if (type <= 4) {
+    return styles.greenBar;
+  }
+
+  return styles.blueBar;
 }
 
 const palette = {
@@ -958,6 +1664,52 @@ const styles = StyleSheet.create({
   selectedAnswerText: {
     color: palette.surface,
   },
+  inlineSection: {
+    borderTopColor: palette.border,
+    borderTopWidth: 1,
+    marginTop: 18,
+    paddingTop: 16,
+  },
+  sectionLabel: {
+    color: palette.ink,
+    fontSize: 15,
+    fontWeight: '800',
+    marginBottom: 10,
+  },
+  stoolGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  stoolButton: {
+    backgroundColor: '#FFFEFB',
+    borderColor: palette.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    flexBasis: '48%',
+    flexGrow: 1,
+    minHeight: 78,
+    padding: 10,
+  },
+  selectedStoolButton: {
+    backgroundColor: palette.ink,
+    borderColor: palette.ink,
+  },
+  stoolButtonLabel: {
+    color: palette.ink,
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  stoolButtonDetail: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 16,
+    marginTop: 4,
+  },
+  selectedStoolText: {
+    color: palette.surface,
+  },
   panelTitle: {
     color: palette.ink,
     fontSize: 18,
@@ -1001,6 +1753,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     minHeight: 48,
     paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   toggleRow: {
     alignItems: 'center',
@@ -1104,6 +1857,72 @@ const styles = StyleSheet.create({
   bluePillText: {
     color: palette.blue,
   },
+  historyStrip: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  historyTile: {
+    alignItems: 'center',
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 58,
+    justifyContent: 'center',
+    width: 38,
+  },
+  greenTile: {
+    backgroundColor: palette.mint,
+    borderColor: palette.green,
+  },
+  coralTile: {
+    backgroundColor: palette.coralSoft,
+    borderColor: palette.coral,
+  },
+  amberTile: {
+    backgroundColor: palette.amberSoft,
+    borderColor: palette.amber,
+  },
+  blueTile: {
+    backgroundColor: palette.blueSoft,
+    borderColor: palette.blue,
+  },
+  historyTileDate: {
+    color: palette.ink,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  historyTileStatus: {
+    color: palette.ink,
+    fontSize: 12,
+    fontWeight: '900',
+    marginTop: 1,
+  },
+  historyTileMeta: {
+    color: palette.muted,
+    fontSize: 10,
+    fontWeight: '900',
+    marginTop: 1,
+  },
+  tileMarkerRow: {
+    flexDirection: 'row',
+    gap: 2,
+    minHeight: 11,
+  },
+  tileMarker: {
+    color: palette.blue,
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  gapList: {
+    gap: 6,
+    marginTop: 12,
+  },
+  gapText: {
+    color: palette.amber,
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 18,
+  },
   historyRow: {
     alignItems: 'center',
     borderTopColor: palette.border,
@@ -1127,34 +1946,38 @@ const styles = StyleSheet.create({
     fontSize: 13,
     marginTop: 2,
   },
-  trendGrid: {
+  historyDetail: {
+    color: palette.muted,
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 5,
+  },
+  summaryGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 12,
-    marginBottom: 14,
+    marginTop: 14,
   },
-  trendCard: {
-    backgroundColor: palette.surface,
-    borderColor: palette.border,
-    borderRadius: 8,
-    borderWidth: 1,
+  summaryMetric: {
+    borderTopColor: palette.border,
+    borderTopWidth: 1,
     flexBasis: '47%',
     flexGrow: 1,
-    minHeight: 128,
-    padding: 14,
+    minHeight: 96,
+    paddingTop: 12,
   },
-  trendLabel: {
+  summaryLabel: {
     color: palette.muted,
     fontSize: 13,
     fontWeight: '800',
   },
-  trendValue: {
+  summaryValue: {
     color: palette.ink,
-    fontSize: 36,
+    fontSize: 30,
     fontWeight: '900',
-    marginTop: 10,
+    marginTop: 6,
   },
-  trendDetail: {
+  summaryDetail: {
     color: palette.muted,
     fontSize: 14,
     fontWeight: '700',
@@ -1172,5 +1995,121 @@ const styles = StyleSheet.create({
     color: palette.ink,
     fontSize: 20,
     fontWeight: '900',
+  },
+  chartRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 38,
+  },
+  chartLabel: {
+    color: palette.ink,
+    flexBasis: 84,
+    flexShrink: 0,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  chartValue: {
+    color: palette.ink,
+    flexBasis: 34,
+    fontSize: 13,
+    fontWeight: '900',
+    textAlign: 'right',
+  },
+  chartMeta: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 18,
+  },
+  chartEmptyText: {
+    color: palette.muted,
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 20,
+  },
+  barTrack: {
+    backgroundColor: palette.surfaceAlt,
+    borderColor: palette.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    flex: 1,
+    height: 14,
+    overflow: 'hidden',
+  },
+  barFill: {
+    backgroundColor: palette.green,
+    borderRadius: 8,
+    height: '100%',
+  },
+  referenceRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 8,
+  },
+  referenceFill: {
+    backgroundColor: palette.amber,
+    height: '100%',
+    opacity: 0.72,
+  },
+  coralBar: {
+    backgroundColor: palette.coral,
+  },
+  greenBar: {
+    backgroundColor: palette.green,
+  },
+  blueBar: {
+    backgroundColor: palette.blue,
+  },
+  sparkBars: {
+    alignItems: 'flex-end',
+    flexDirection: 'row',
+    gap: 3,
+    height: 66,
+  },
+  sparkBar: {
+    backgroundColor: palette.blue,
+    borderRadius: 4,
+    flex: 1,
+    minWidth: 4,
+  },
+  chartAxis: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 8,
+  },
+  timelineStrip: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 3,
+    minHeight: 28,
+  },
+  timelineDay: {
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 4,
+  },
+  timelineDot: {
+    backgroundColor: palette.border,
+    borderRadius: 5,
+    height: 9,
+    width: 9,
+  },
+  timelineDotActive: {
+    backgroundColor: palette.ink,
+  },
+  completionTrack: {
+    backgroundColor: palette.amberSoft,
+    borderColor: palette.border,
+    borderRadius: 8,
+    borderWidth: 1,
+    height: 18,
+    marginBottom: 10,
+    overflow: 'hidden',
+  },
+  completionFill: {
+    backgroundColor: palette.green,
+    height: '100%',
   },
 });

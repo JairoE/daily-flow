@@ -2,9 +2,12 @@ import * as SQLite from 'expo-sqlite';
 
 import type {
   DailyEntry,
+  DailyEntryInput,
+  DailySymptoms,
   NotificationRecord,
   NotificationType,
   Profile,
+  StoolType,
 } from '../types';
 
 const PROFILE_ID = 'local-profile';
@@ -25,6 +28,14 @@ type DailyEntryRow = {
   id: string;
   local_date: string;
   had_bowel_movement: number;
+  details_recorded: number;
+  stool_type: number | null;
+  symptom_straining: number;
+  symptom_pain: number;
+  symptom_bloating: number;
+  symptom_incomplete_evacuation: number;
+  laxative_used: number;
+  laxative_note: string;
   checked_in_at: string;
   created_at: string;
   updated_at: string;
@@ -56,6 +67,14 @@ CREATE TABLE IF NOT EXISTS daily_entries (
   id TEXT PRIMARY KEY NOT NULL,
   local_date TEXT NOT NULL UNIQUE,
   had_bowel_movement INTEGER NOT NULL,
+  details_recorded INTEGER NOT NULL DEFAULT 0,
+  stool_type INTEGER NULL,
+  symptom_straining INTEGER NOT NULL DEFAULT 0,
+  symptom_pain INTEGER NOT NULL DEFAULT 0,
+  symptom_bloating INTEGER NOT NULL DEFAULT 0,
+  symptom_incomplete_evacuation INTEGER NOT NULL DEFAULT 0,
+  laxative_used INTEGER NOT NULL DEFAULT 0,
+  laxative_note TEXT NOT NULL DEFAULT '',
   checked_in_at TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -76,10 +95,102 @@ ON notification_records(local_date, type);
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
+const defaultSymptoms: DailySymptoms = {
+  straining: false,
+  pain: false,
+  bloating: false,
+  incompleteEvacuation: false,
+};
+
+const dailyEntryMigrations: { name: string; sql: string }[] = [
+  {
+    name: 'details_recorded',
+    sql: 'ALTER TABLE daily_entries ADD COLUMN details_recorded INTEGER NOT NULL DEFAULT 0',
+  },
+  {
+    name: 'stool_type',
+    sql: 'ALTER TABLE daily_entries ADD COLUMN stool_type INTEGER NULL',
+  },
+  {
+    name: 'symptom_straining',
+    sql: 'ALTER TABLE daily_entries ADD COLUMN symptom_straining INTEGER NOT NULL DEFAULT 0',
+  },
+  {
+    name: 'symptom_pain',
+    sql: 'ALTER TABLE daily_entries ADD COLUMN symptom_pain INTEGER NOT NULL DEFAULT 0',
+  },
+  {
+    name: 'symptom_bloating',
+    sql: 'ALTER TABLE daily_entries ADD COLUMN symptom_bloating INTEGER NOT NULL DEFAULT 0',
+  },
+  {
+    name: 'symptom_incomplete_evacuation',
+    sql: 'ALTER TABLE daily_entries ADD COLUMN symptom_incomplete_evacuation INTEGER NOT NULL DEFAULT 0',
+  },
+  {
+    name: 'laxative_used',
+    sql: 'ALTER TABLE daily_entries ADD COLUMN laxative_used INTEGER NOT NULL DEFAULT 0',
+  },
+  {
+    name: 'laxative_note',
+    sql: "ALTER TABLE daily_entries ADD COLUMN laxative_note TEXT NOT NULL DEFAULT ''",
+  },
+];
+
+function isStoolType(value: number | null): value is StoolType {
+  return (
+    value === 1 ||
+    value === 2 ||
+    value === 3 ||
+    value === 4 ||
+    value === 5 ||
+    value === 6 ||
+    value === 7
+  );
+}
+
+function normalizeSymptoms(input?: Partial<DailySymptoms>): DailySymptoms {
+  return {
+    straining: input?.straining ?? false,
+    pain: input?.pain ?? false,
+    bloating: input?.bloating ?? false,
+    incompleteEvacuation: input?.incompleteEvacuation ?? false,
+  };
+}
+
+function normalizeEntryInput(input: DailyEntryInput) {
+  const symptoms = normalizeSymptoms(input.symptoms);
+  const trimmedNote = (input.laxativeNote ?? '').trim().slice(0, 160);
+
+  return {
+    hadBowelMovement: input.hadBowelMovement,
+    detailsRecorded: true,
+    stoolType:
+      input.hadBowelMovement && input.stoolType ? input.stoolType : null,
+    symptoms,
+    laxativeUsed: input.laxativeUsed ?? false,
+    laxativeNote: trimmedNote,
+  };
+}
+
+async function migrateDailyEntryColumns(db: SQLite.SQLiteDatabase) {
+  const columns = await db.getAllAsync<{ name: string }>(
+    'PRAGMA table_info(daily_entries)',
+  );
+  const existingColumns = new Set(columns.map((column) => column.name));
+
+  for (const migration of dailyEntryMigrations) {
+    if (!existingColumns.has(migration.name)) {
+      await db.execAsync(migration.sql);
+    }
+  }
+}
+
 async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
     dbPromise = SQLite.openDatabaseAsync('daily-flow.db').then(async (db) => {
       await db.execAsync(schema);
+      await migrateDailyEntryColumns(db);
       return db;
     });
   }
@@ -106,6 +217,16 @@ function mapEntry(row: DailyEntryRow): DailyEntry {
     id: row.id,
     localDate: row.local_date,
     hadBowelMovement: row.had_bowel_movement === 1,
+    detailsRecorded: row.details_recorded === 1,
+    stoolType: isStoolType(row.stool_type) ? row.stool_type : null,
+    symptoms: {
+      straining: row.symptom_straining === 1,
+      pain: row.symptom_pain === 1,
+      bloating: row.symptom_bloating === 1,
+      incompleteEvacuation: row.symptom_incomplete_evacuation === 1,
+    },
+    laxativeUsed: row.laxative_used === 1,
+    laxativeNote: row.laxative_note ?? '',
     checkedInAt: row.checked_in_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -226,14 +347,20 @@ export async function getEntryByDate(
 
 export async function upsertDailyEntry(
   localDate: string,
-  hadBowelMovement: boolean,
+  input: DailyEntryInput,
 ): Promise<DailyEntry> {
   const now = new Date().toISOString();
   const existing = await getEntryByDate(localDate);
+  const normalized = normalizeEntryInput(input);
   const entry: DailyEntry = {
     id: existing?.id ?? `entry-${localDate}`,
     localDate,
-    hadBowelMovement,
+    hadBowelMovement: normalized.hadBowelMovement,
+    detailsRecorded: normalized.detailsRecorded,
+    stoolType: normalized.stoolType,
+    symptoms: normalized.symptoms,
+    laxativeUsed: normalized.laxativeUsed,
+    laxativeNote: normalized.laxativeNote,
     checkedInAt: now,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -245,18 +372,42 @@ export async function upsertDailyEntry(
       id,
       local_date,
       had_bowel_movement,
+      details_recorded,
+      stool_type,
+      symptom_straining,
+      symptom_pain,
+      symptom_bloating,
+      symptom_incomplete_evacuation,
+      laxative_used,
+      laxative_note,
       checked_in_at,
       created_at,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(local_date) DO UPDATE SET
       had_bowel_movement = excluded.had_bowel_movement,
+      details_recorded = excluded.details_recorded,
+      stool_type = excluded.stool_type,
+      symptom_straining = excluded.symptom_straining,
+      symptom_pain = excluded.symptom_pain,
+      symptom_bloating = excluded.symptom_bloating,
+      symptom_incomplete_evacuation = excluded.symptom_incomplete_evacuation,
+      laxative_used = excluded.laxative_used,
+      laxative_note = excluded.laxative_note,
       checked_in_at = excluded.checked_in_at,
       updated_at = excluded.updated_at`,
     [
       entry.id,
       entry.localDate,
       entry.hadBowelMovement ? 1 : 0,
+      entry.detailsRecorded ? 1 : 0,
+      entry.stoolType,
+      entry.symptoms.straining ? 1 : 0,
+      entry.symptoms.pain ? 1 : 0,
+      entry.symptoms.bloating ? 1 : 0,
+      entry.symptoms.incompleteEvacuation ? 1 : 0,
+      entry.laxativeUsed ? 1 : 0,
+      entry.laxativeNote,
       entry.checkedInAt,
       entry.createdAt,
       entry.updatedAt,

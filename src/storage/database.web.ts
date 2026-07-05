@@ -1,8 +1,11 @@
 import type {
   DailyEntry,
+  DailyEntryInput,
+  DailySymptoms,
   NotificationRecord,
   NotificationType,
   Profile,
+  StoolType,
 } from '../types';
 
 const PROFILE_ID = 'local-profile';
@@ -22,6 +25,62 @@ function emptyState(): WebState {
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isStoolType(value: unknown): value is StoolType {
+  return (
+    value === 1 ||
+    value === 2 ||
+    value === 3 ||
+    value === 4 ||
+    value === 5 ||
+    value === 6 ||
+    value === 7
+  );
+}
+
+function normalizeSymptoms(input?: Partial<DailySymptoms>): DailySymptoms {
+  return {
+    straining: input?.straining ?? false,
+    pain: input?.pain ?? false,
+    bloating: input?.bloating ?? false,
+    incompleteEvacuation: input?.incompleteEvacuation ?? false,
+  };
+}
+
+function normalizeEntry(rawEntry: DailyEntry): DailyEntry {
+  const raw = rawEntry as DailyEntry & {
+    detailsRecorded?: boolean;
+    stoolType?: unknown;
+    symptoms?: Partial<DailySymptoms>;
+    laxativeUsed?: boolean;
+    laxativeNote?: string;
+  };
+
+  return {
+    ...rawEntry,
+    detailsRecorded: raw.detailsRecorded ?? false,
+    stoolType: isStoolType(raw.stoolType) ? raw.stoolType : null,
+    symptoms: normalizeSymptoms(raw.symptoms),
+    laxativeUsed: raw.laxativeUsed ?? false,
+    laxativeNote: raw.laxativeNote ?? '',
+  };
+}
+
+function normalizeEntryInput(input: DailyEntryInput) {
+  return {
+    hadBowelMovement: input.hadBowelMovement,
+    detailsRecorded: true,
+    stoolType:
+      input.hadBowelMovement && input.stoolType ? input.stoolType : null,
+    symptoms: normalizeSymptoms(input.symptoms),
+    laxativeUsed: input.laxativeUsed ?? false,
+    laxativeNote: (input.laxativeNote ?? '').trim().slice(0, 160),
+  };
+}
+
 function readState(): WebState {
   if (typeof window === 'undefined' || !window.localStorage) {
     return emptyState();
@@ -34,7 +93,23 @@ function readState(): WebState {
   }
 
   try {
-    return JSON.parse(raw) as WebState;
+    const parsed: unknown = JSON.parse(raw);
+
+    if (!isRecord(parsed)) {
+      return emptyState();
+    }
+
+    const state = parsed as WebState;
+
+    return {
+      profile: state.profile ?? null,
+      entries: Array.isArray(state.entries)
+        ? state.entries.map(normalizeEntry)
+        : [],
+      notificationRecords: Array.isArray(state.notificationRecords)
+        ? state.notificationRecords
+        : [],
+    };
   } catch {
     return emptyState();
   }
@@ -100,14 +175,20 @@ export async function getEntryByDate(
 
 export async function upsertDailyEntry(
   localDate: string,
-  hadBowelMovement: boolean,
+  input: DailyEntryInput,
 ): Promise<DailyEntry> {
   const now = new Date().toISOString();
   const existing = await getEntryByDate(localDate);
+  const normalized = normalizeEntryInput(input);
   const entry: DailyEntry = {
     id: existing?.id ?? `entry-${localDate}`,
     localDate,
-    hadBowelMovement,
+    hadBowelMovement: normalized.hadBowelMovement,
+    detailsRecorded: normalized.detailsRecorded,
+    stoolType: normalized.stoolType,
+    symptoms: normalized.symptoms,
+    laxativeUsed: normalized.laxativeUsed,
+    laxativeNote: normalized.laxativeNote,
     checkedInAt: now,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
