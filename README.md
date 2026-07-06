@@ -1,6 +1,6 @@
 # Daily Flow
 
-Daily Flow is a simple local-first Expo app for tracking bowel movement frequency as wellness information, not medical diagnosis or treatment.
+Daily Flow is a local-first Expo app for tracking bowel movement frequency and related wellness context. It is built for personal tracking and clinician discussion, not medical diagnosis or treatment.
 
 ## Run
 
@@ -19,14 +19,82 @@ npm run typecheck
 npm test
 ```
 
-## Scope
+## Features
 
-- Create a basic local profile.
-- Log each day as Yes or No.
-- View recent history and simple trend summaries.
-- Use opt-in, gentle reminders with wellness language.
-- Keep health-adjacent data on device by default.
+### Today
 
-## Privacy
+- Log whether you had a bowel movement today.
+- For Yes entries, choose a required Bristol stool type from 1 to 7.
+- For Yes or No entries, optionally track symptoms:
+  - Straining
+  - Pain
+  - Bloating
+  - Incomplete evacuation
+- Optionally mark laxative use.
+- Add a short laxative/context note, capped at 160 characters.
+- Save the whole daily check-in at once.
+- Update today's entry without creating duplicates.
+- See inline validation for missing Yes/No choice, missing Bristol type, or an over-limit note.
 
-The MVP stores profile and check-in data locally. It does not include accounts, cloud sync, ads, analytics, or diagnostic/treatment claims.
+### History
+
+- Review the last 30 calendar days.
+- See a scan-first 30-day overview strip with fixed-size day tiles.
+- Day tiles show Yes, No, Missed, or Pending status.
+- Yes tiles can show the logged Bristol type.
+- Symptom and laxative days are marked directly in the strip.
+- Runs of 2 or more days without a bowel movement are labeled as gaps.
+- Recent history rows include the exact date, status, Bristol type, symptom names, laxative marker, and note preview when present.
+
+### Trends
+
+- Doctor summary panel for clinician discussion, including:
+  - Bowel movement days in the last 30 days
+  - Average bowel movements per week
+  - Current gap
+  - Longest gap
+  - Check-in completion rate
+  - Most common Bristol type
+  - Symptom burden days
+  - Laxative-use days
+- Weekly frequency chart with a neutral 3/week reference line.
+- Rolling 7-day count chart across the last 30 days.
+- Days-between-bowel-movements interval chart.
+- Bristol stool form distribution for types 1-7, with hard/lumpy, formed, and loose/watery ranges.
+- Symptom burden chart for straining, pain, bloating, and incomplete evacuation.
+- Laxative timeline aligned to the 30-day history window.
+- Data completeness chart showing answered days and missed check-ins.
+- Empty states for charts that need more check-ins.
+
+### Settings And Reminders
+
+- Create and edit a local profile.
+- Set a daily check-in time.
+- Turn gentle reminders on or off.
+- Use private notification text that avoids bowel-movement wording.
+- Store a privacy lock preference.
+- Delete local data from the app.
+
+## Data And Privacy
+
+- Data stays local by default.
+- Native builds use SQLite through `expo-sqlite`.
+- Web builds use `localStorage`.
+- Existing Yes/No-only entries are still readable and count toward frequency and check-in metrics.
+- Older entries without detail fields are excluded from Bristol, symptom, laxative, and note-specific trend denominators.
+- The app does not include accounts, cloud sync, ads, analytics, diagnosis, or treatment recommendations.
+- The app uses neutral wellness language and is intended as tracked context for discussion with a clinician.
+
+## Development Notes
+
+- Trend calculations live in pure helpers in `src/lib/trends.ts`.
+- Trend helper tests cover legacy entries, Bristol distribution, symptoms, laxative use, notes, gaps, weekly bars, rolling 7-day counts, and intervals.
+- Storage adapters normalize old data into the current entry shape.
+- Charts are built with React Native `View` and `Text` primitives instead of a chart dependency.
+
+## Verify
+
+```bash
+npm run typecheck
+npm test
+```
