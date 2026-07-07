@@ -1,5 +1,9 @@
 import type { DailyEntry, DailyEntryInput } from '../types';
-import { buildHistoryDays, summarizeTrends } from '../lib/trends';
+import {
+  buildHistoryDays,
+  filterHistoryDaysForProfile,
+  summarizeTrends,
+} from '../lib/trends';
 
 const emptySymptoms = {
   straining: false,
@@ -187,6 +191,29 @@ describe('trend helpers', () => {
         label: 'Fri, Jul 3',
         daysSincePrevious: 4,
       },
+    ]);
+  });
+
+  it('filters visible history to profile start while preserving filled earlier days', () => {
+    const historyDays = buildHistoryDays(
+      [richEntry('2026-07-02', { hadBowelMovement: true, stoolType: 4 })],
+      {
+        days: 7,
+        today: '2026-07-07',
+        includeTodayAsMissed: true,
+      },
+    );
+
+    const visibleDays = filterHistoryDaysForProfile(
+      historyDays,
+      '2026-07-05T14:30:00.000Z',
+    );
+
+    expect(visibleDays.map((day) => day.localDate)).toEqual([
+      '2026-07-07',
+      '2026-07-06',
+      '2026-07-05',
+      '2026-07-02',
     ]);
   });
 });

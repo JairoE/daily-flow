@@ -38,6 +38,10 @@ function isNonPending(day: HistoryDay): boolean {
   return day.status !== 'pending';
 }
 
+function profileStartDateKey(profileCreatedAt: string): string {
+  return getLocalDateKey(new Date(profileCreatedAt));
+}
+
 function isNoBowelMovementDay(day: HistoryDay): boolean {
   return day.status === 'no' || day.status === 'missed';
 }
@@ -215,6 +219,17 @@ export function buildHistoryDays(
         entry: null,
       };
     });
+}
+
+export function filterHistoryDaysForProfile(
+  historyDays: HistoryDay[],
+  profileCreatedAt: string,
+): HistoryDay[] {
+  const profileStart = profileStartDateKey(profileCreatedAt);
+
+  return historyDays.filter(
+    (day) => day.localDate >= profileStart || day.entry !== null,
+  );
 }
 
 export function summarizeTrends(
