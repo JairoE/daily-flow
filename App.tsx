@@ -29,8 +29,18 @@ import {
   saveProfile,
   upsertDailyEntry,
 } from './src/storage/database';
-import { getLocalDateKey, isPastCheckInTime, normalizeCheckInTime } from './src/lib/dates';
-import { buildHistoryDays, summarizeTrends } from './src/lib/trends';
+import {
+  addDays,
+  getLocalDateKey,
+  isPastCheckInTime,
+  normalizeCheckInTime,
+  parseLocalDateKey,
+} from './src/lib/dates';
+import {
+  buildHistoryDays,
+  filterHistoryDaysForProfile,
+  summarizeTrends,
+} from './src/lib/trends';
 import type {
   DailyEntry,
   DailyEntryInput,
@@ -167,6 +177,21 @@ export default function App() {
     );
   }
 
+  async function handleLogForDate(localDate: string, input: DailyEntryInput) {
+    if (!profile) {
+      return;
+    }
+
+    const entry = await upsertDailyEntry(localDate, input);
+    await refreshEntries();
+
+    if (localDate === today) {
+      await syncNotificationsAfterEntry(profile, entry);
+    }
+
+    setNotice(`Saved ${shortMonthDay(localDate)}.`);
+  }
+
   async function handleSaveSettings(nextProfile: Profile) {
     const normalizedTime = normalizeCheckInTime(nextProfile.checkInTime);
 
@@ -237,23 +262,25 @@ export default function App() {
       <StatusBar style="dark" />
       <View style={styles.appShell}>
         <View style={styles.header}>
-          <View>
-            <Text style={styles.appName}>Daily Flow</Text>
-            <Text style={styles.headerMeta}>
-              {profile.displayName} · Local-only wellness tracker
-            </Text>
-          </View>
+          <Text style={styles.appName}>
+            {activeTab === 'trends' ? 'Statistics' : 'Daily Flow'}
+          </Text>
+          <Text style={styles.headerMeta}>
+            {profile.displayName} · Local-only wellness tracker
+          </Text>
         </View>
 
         <View style={styles.tabs} accessibilityRole="tablist">
           {tabs.map((tab) => (
             <Pressable
               key={tab.key}
+              accessibilityLabel={`Open ${tab.label} tab`}
               accessibilityRole="tab"
               accessibilityState={{ selected: activeTab === tab.key }}
               onPress={() => setActiveTab(tab.key)}
-              style={[
+              style={({ pressed }) => [
                 styles.tabButton,
+                pressed && styles.pressedControl,
                 activeTab === tab.key && styles.activeTabButton,
               ]}
             >
@@ -284,7 +311,11 @@ export default function App() {
           ) : null}
 
           {activeTab === 'history' ? (
-            <HistoryScreen historyDays={historyDays} />
+            <HistoryScreen
+              historyDays={historyDays}
+              profile={profile}
+              onLogDate={handleLogForDate}
+            />
           ) : null}
 
           {activeTab === 'trends' ? (
@@ -534,11 +565,18 @@ function TodayScreen({
         />
         <View style={styles.answerRow}>
           <Pressable
+            accessibilityLabel="Log yes for today"
+            accessibilityRole="button"
+            accessibilityState={{
+              disabled: saving,
+              selected: hadBowelMovement === true,
+            }}
             onPress={() => handleChoice(true)}
             disabled={saving}
-            style={[
+            style={({ pressed }) => [
               styles.answerButton,
               styles.yesButton,
+              pressed && styles.pressedControl,
               hadBowelMovement === true && styles.selectedYesButton,
             ]}
           >
@@ -552,11 +590,18 @@ function TodayScreen({
             </Text>
           </Pressable>
           <Pressable
+            accessibilityLabel="Log no for today"
+            accessibilityRole="button"
+            accessibilityState={{
+              disabled: saving,
+              selected: hadBowelMovement === false,
+            }}
             onPress={() => handleChoice(false)}
             disabled={saving}
-            style={[
+            style={({ pressed }) => [
               styles.answerButton,
               styles.noButton,
+              pressed && styles.pressedControl,
               hadBowelMovement === false && styles.selectedNoButton,
             ]}
           >
@@ -578,12 +623,16 @@ function TodayScreen({
               {stoolTypeOptions.map((option) => (
                 <Pressable
                   key={option.type}
+                  accessibilityLabel={`Select ${option.label}: ${option.detail}`}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: stoolType === option.type }}
                   onPress={() => {
                     setStoolType(option.type);
                     setError('');
                   }}
-                  style={[
+                  style={({ pressed }) => [
                     styles.stoolButton,
+                    pressed && styles.pressedControl,
                     stoolType === option.type && styles.selectedStoolButton,
                   ]}
                 >
@@ -658,9 +707,23 @@ function TodayScreen({
   );
 }
 
-function HistoryScreen({ historyDays }: { historyDays: HistoryDay[] }) {
+function HistoryScreen({
+  historyDays,
+  profile,
+  onLogDate,
+}: {
+  historyDays: HistoryDay[];
+  profile: Profile;
+  onLogDate: (localDate: string, input: DailyEntryInput) => Promise<void>;
+}) {
   const chronologicalDays = [...historyDays].reverse();
-  const gapLabels = buildHistoryGapLabels(chronologicalDays);
+  const visibleHistoryDays = filterHistoryDaysForProfile(
+    historyDays,
+    profile.createdAt,
+  );
+  const visibleChronologicalDays = [...visibleHistoryDays].reverse();
+  const gapLabels = buildHistoryGapLabels(visibleChronologicalDays);
+  const profileStart = profileCreatedDateKey(profile.createdAt);
 
   return (
     <View>
@@ -668,7 +731,11 @@ function HistoryScreen({ historyDays }: { historyDays: HistoryDay[] }) {
         <Text style={styles.panelTitle}>30-day overview</Text>
         <View style={styles.historyStrip}>
           {chronologicalDays.map((day) => (
-            <HistoryTile key={day.localDate} day={day} />
+            <HistoryTile
+              key={day.localDate}
+              day={day}
+              isPreProfile={day.localDate < profileStart && !day.entry}
+            />
           ))}
         </View>
         {gapLabels.length ? (
@@ -684,9 +751,14 @@ function HistoryScreen({ historyDays }: { historyDays: HistoryDay[] }) {
         )}
       </View>
 
+      <BackfillEntryPanel
+        profileCreatedAt={profile.createdAt}
+        onSave={onLogDate}
+      />
+
       <View style={styles.panel}>
         <Text style={styles.panelTitle}>Recent history</Text>
-        {historyDays.map((day) => (
+        {visibleHistoryDays.map((day) => (
           <View key={day.localDate} style={styles.historyRow}>
             <View style={styles.historyDateBlock}>
               <Text style={styles.historyLabel}>{day.label}</Text>
@@ -704,6 +776,196 @@ function HistoryScreen({ historyDays }: { historyDays: HistoryDay[] }) {
   );
 }
 
+function BackfillEntryPanel({
+  profileCreatedAt,
+  onSave,
+}: {
+  profileCreatedAt: string;
+  onSave: (localDate: string, input: DailyEntryInput) => Promise<void>;
+}) {
+  const profileStart = profileCreatedDateKey(profileCreatedAt);
+  const [localDate, setLocalDate] = useState(addDays(profileStart, -1));
+  const [hadBowelMovement, setHadBowelMovement] = useState<boolean | null>(null);
+  const [stoolType, setStoolType] = useState<StoolType | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    setLocalDate(addDays(profileStart, -1));
+  }, [profileStart]);
+
+  function handleChoice(value: boolean) {
+    setHadBowelMovement(value);
+    setError('');
+
+    if (!value) {
+      setStoolType(null);
+    }
+  }
+
+  async function handleSave() {
+    const normalizedDate = normalizeBackfillLocalDate(localDate);
+
+    if (!normalizedDate) {
+      setError('Use a valid date in YYYY-MM-DD format.');
+      return;
+    }
+
+    if (normalizedDate >= profileStart) {
+      setError(`Choose a date before ${profileStart}.`);
+      return;
+    }
+
+    if (hadBowelMovement === null) {
+      setError('Choose Yes or No first.');
+      return;
+    }
+
+    if (hadBowelMovement && stoolType === null) {
+      setError('Choose a Bristol stool type.');
+      return;
+    }
+
+    setSaving(true);
+    setError('');
+
+    try {
+      await onSave(normalizedDate, {
+        hadBowelMovement,
+        stoolType: hadBowelMovement ? stoolType : null,
+      });
+      setLocalDate(addDays(normalizedDate, -1));
+      setHadBowelMovement(null);
+      setStoolType(null);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <View style={styles.panel}>
+      <View style={styles.chartCardHeader}>
+        <Text style={styles.panelTitle}>Fill an earlier day</Text>
+        <Text style={styles.rangeText}>Optional</Text>
+      </View>
+      <Text style={styles.bodyText}>
+        Add remembered check-ins from before your profile start date.
+      </Text>
+      <View style={styles.backfillForm}>
+        <LabeledInput
+          label="Date"
+          value={localDate}
+          placeholder="YYYY-MM-DD"
+          keyboardType="numbers-and-punctuation"
+          onChangeText={(value) => {
+            setLocalDate(value);
+            setError('');
+          }}
+        />
+        <View style={styles.answerRow}>
+          <Pressable
+            accessibilityLabel="Backfill yes for selected date"
+            accessibilityRole="button"
+            accessibilityState={{
+              disabled: saving,
+              selected: hadBowelMovement === true,
+            }}
+            disabled={saving}
+            onPress={() => handleChoice(true)}
+            style={({ pressed }) => [
+              styles.answerButton,
+              styles.yesButton,
+              pressed && styles.pressedControl,
+              hadBowelMovement === true && styles.selectedYesButton,
+            ]}
+          >
+            <Text
+              style={[
+                styles.answerButtonText,
+                hadBowelMovement === true && styles.selectedAnswerText,
+              ]}
+            >
+              Yes
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityLabel="Backfill no for selected date"
+            accessibilityRole="button"
+            accessibilityState={{
+              disabled: saving,
+              selected: hadBowelMovement === false,
+            }}
+            disabled={saving}
+            onPress={() => handleChoice(false)}
+            style={({ pressed }) => [
+              styles.answerButton,
+              styles.noButton,
+              pressed && styles.pressedControl,
+              hadBowelMovement === false && styles.selectedNoButton,
+            ]}
+          >
+            <Text
+              style={[
+                styles.answerButtonText,
+                hadBowelMovement === false && styles.selectedAnswerText,
+              ]}
+            >
+              No
+            </Text>
+          </Pressable>
+        </View>
+        {hadBowelMovement ? (
+          <View style={styles.inlineSection}>
+            <Text style={styles.sectionLabel}>Bristol stool type</Text>
+            <View style={styles.stoolGrid}>
+              {stoolTypeOptions.map((option) => (
+                <Pressable
+                  key={option.type}
+                  accessibilityLabel={`Select ${option.label}: ${option.detail}`}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: stoolType === option.type }}
+                  onPress={() => {
+                    setStoolType(option.type);
+                    setError('');
+                  }}
+                  style={({ pressed }) => [
+                    styles.stoolButton,
+                    pressed && styles.pressedControl,
+                    stoolType === option.type && styles.selectedStoolButton,
+                  ]}
+                >
+                  <Text
+                    style={[
+                      styles.stoolButtonLabel,
+                      stoolType === option.type && styles.selectedStoolText,
+                    ]}
+                  >
+                    {option.label}
+                  </Text>
+                  <Text
+                    style={[
+                      styles.stoolButtonDetail,
+                      stoolType === option.type && styles.selectedStoolText,
+                    ]}
+                  >
+                    {option.detail}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        ) : null}
+      </View>
+      {error ? <Text style={styles.errorText}>{error}</Text> : null}
+      <PrimaryButton
+        label={saving ? 'Saving...' : 'Save earlier day'}
+        disabled={saving}
+        onPress={handleSave}
+      />
+    </View>
+  );
+}
+
 function TrendsScreen({
   trends,
   historyDays,
@@ -713,34 +975,45 @@ function TrendsScreen({
 }) {
   return (
     <View>
-      <View style={styles.panel}>
-        <Text style={styles.panelTitle}>Doctor summary</Text>
+      <SectionHeader title="Records" range="Last 30 Days" />
+      <View style={styles.recordsPanel}>
         <Text style={styles.bodyText}>For discussion with your clinician.</Text>
         <View style={styles.summaryGrid}>
-          <SummaryMetric
-            label="BM days"
-            value={`${trends.bowelMovementDaysLast30}`}
-            detail="of 30 days"
-          />
-          <SummaryMetric
-            label="Average"
-            value={`${trends.averagePerWeekLast30}`}
-            detail="per week"
-          />
           <SummaryMetric
             label="Current gap"
             value={formatDaysValue(trends.currentGapDays)}
             detail={pluralize(trends.currentGapDays ?? 0, 'day')}
+            tone="amber"
           />
           <SummaryMetric
             label="Longest gap"
             value={`${trends.longestGapDays}`}
             detail={pluralize(trends.longestGapDays, 'day')}
+            tone="purple"
           />
           <SummaryMetric
-            label="Check-ins"
+            label="Completed"
+            value={`${trends.completedDaysLast30}`}
+            detail="check-ins"
+            tone="rose"
+          />
+          <SummaryMetric
+            label="Success rate"
             value={`${trends.checkInRateLast30}%`}
             detail="completed"
+            tone="green"
+          />
+          <SummaryMetric
+            label="BM days"
+            value={`${trends.bowelMovementDaysLast30}`}
+            detail="of 30 days"
+            tone="blue"
+          />
+          <SummaryMetric
+            label="Average"
+            value={`${trends.averagePerWeekLast30}`}
+            detail="per week"
+            tone="teal"
           />
           <SummaryMetric
             label="Common Bristol"
@@ -754,62 +1027,90 @@ function TrendsScreen({
                 ? 'most logged type'
                 : 'not enough detail'
             }
+            tone="slate"
           />
           <SummaryMetric
             label="Symptoms"
             value={`${trends.symptomBurdenDays}`}
             detail="days with any"
-          />
-          <SummaryMetric
-            label="Laxative"
-            value={`${trends.laxativeUseDays}`}
-            detail="days logged"
+            tone="coral"
           />
         </View>
       </View>
 
-      <ChartPanel title="Weekly frequency">
+      <SectionHeader title={formatRecentWeekRange(historyDays)} range="Last 7 Days" />
+      <View style={styles.panel}>
+        <HabitWeekMatrix historyDays={historyDays} />
+      </View>
+
+      <SectionHeader title="Progress" range="Last 7 Days" />
+      <View style={styles.panel}>
+        <RecentProgressChart historyDays={historyDays} />
+      </View>
+
+      <ChartPanel title="Weekly frequency" range="Last 30 Days">
         <FrequencyBarChart trends={trends} />
       </ChartPanel>
 
-      <ChartPanel title="Rolling 7-day count">
-        <RollingTrendChart trends={trends} />
-      </ChartPanel>
-
-      <ChartPanel title="Days between bowel movements">
+      <ChartPanel title="Days between bowel movements" range="Last 30 Days">
         <IntervalChart trends={trends} />
       </ChartPanel>
 
-      <ChartPanel title="Bristol stool form">
+      <ChartPanel title="Bristol stool form" range="Last 30 Days">
         <BristolDistributionChart trends={trends} />
       </ChartPanel>
 
-      <ChartPanel title="Symptom burden">
+      <ChartPanel title="Symptom burden" range="Last 30 Days">
         <SymptomBurdenChart trends={trends} />
       </ChartPanel>
 
-      <ChartPanel title="Laxative timeline">
+      <ChartPanel title="Laxative timeline" range="Last 30 Days">
         <LaxativeTimeline historyDays={historyDays} />
       </ChartPanel>
 
-      <ChartPanel title="Data completeness">
+      <ChartPanel title="Data completeness" range="Last 30 Days">
         <DataCompletenessChart trends={trends} />
       </ChartPanel>
     </View>
   );
 }
 
-function HistoryTile({ day }: { day: HistoryDay }) {
+function HistoryTile({
+  day,
+  isPreProfile = false,
+}: {
+  day: HistoryDay;
+  isPreProfile?: boolean;
+}) {
   const selectedSymptomCount = day.entry ? symptomCount(day.entry.symptoms) : 0;
 
   return (
     <View
       accessible
-      accessibilityLabel={`${day.label}, ${statusText(day.status)}${day.entry?.stoolType ? `, Bristol ${day.entry.stoolType}` : ''}`}
-      style={[styles.historyTile, historyTileStyle(day.status)]}
+      accessibilityLabel={`${day.label}, ${
+        isPreProfile ? 'Before profile start' : statusText(day.status)
+      }${day.entry?.stoolType ? `, Bristol ${day.entry.stoolType}` : ''}`}
+      style={[
+        styles.historyTile,
+        isPreProfile ? styles.preProfileTile : historyTileStyle(day.status),
+      ]}
     >
-      <Text style={styles.historyTileDate}>{Number(day.localDate.slice(-2))}</Text>
-      <Text style={styles.historyTileStatus}>{statusAbbreviation(day.status)}</Text>
+      <Text
+        style={[
+          styles.historyTileDate,
+          isPreProfile && styles.preProfileTileText,
+        ]}
+      >
+        {Number(day.localDate.slice(-2))}
+      </Text>
+      <Text
+        style={[
+          styles.historyTileStatus,
+          isPreProfile && styles.preProfileTileText,
+        ]}
+      >
+        {isPreProfile ? '-' : statusAbbreviation(day.status)}
+      </Text>
       {day.entry?.stoolType ? (
         <Text style={styles.historyTileMeta}>B{day.entry.stoolType}</Text>
       ) : null}
@@ -825,15 +1126,169 @@ function HistoryTile({ day }: { day: HistoryDay }) {
 
 function ChartPanel({
   title,
+  range,
   children,
 }: {
   title: string;
+  range?: string;
   children: ReactNode;
 }) {
   return (
     <View style={styles.panel}>
-      <Text style={styles.panelTitle}>{title}</Text>
+      <View style={styles.chartCardHeader}>
+        <Text style={styles.panelTitle}>{title}</Text>
+        {range ? <Text style={styles.rangeText}>{range}</Text> : null}
+      </View>
       {children}
+    </View>
+  );
+}
+
+function SectionHeader({ title, range }: { title: string; range?: string }) {
+  return (
+    <View style={styles.sectionHeader}>
+      <Text style={styles.sectionTitle}>{title}</Text>
+      {range ? <Text style={styles.sectionRange}>{range}</Text> : null}
+    </View>
+  );
+}
+
+function HabitWeekMatrix({ historyDays }: { historyDays: HistoryDay[] }) {
+  const days = [...historyDays.slice(0, 7)].reverse();
+  const rows = [
+    {
+      label: 'Check-in',
+      tone: 'blue' as const,
+      isActive: (day: HistoryDay) => day.status === 'yes' || day.status === 'no',
+      isMuted: (day: HistoryDay) => day.status === 'missed' || day.status === 'pending',
+    },
+    {
+      label: 'Movement',
+      tone: 'green' as const,
+      isActive: (day: HistoryDay) => day.status === 'yes',
+      isMuted: (day: HistoryDay) => day.status === 'missed' || day.status === 'pending',
+    },
+    {
+      label: 'Details',
+      tone: 'purple' as const,
+      isActive: (day: HistoryDay) => day.entry?.detailsRecorded === true,
+      isMuted: (day: HistoryDay) => day.status === 'missed' || day.status === 'pending',
+    },
+    {
+      label: 'Symptoms',
+      tone: 'rose' as const,
+      isActive: (day: HistoryDay) =>
+        day.entry ? symptomCount(day.entry.symptoms) > 0 : false,
+      isMuted: (day: HistoryDay) => day.status === 'missed' || day.status === 'pending',
+    },
+    {
+      label: 'Context',
+      tone: 'amber' as const,
+      isActive: (day: HistoryDay) =>
+        day.entry?.laxativeUsed === true ||
+        Boolean(day.entry?.laxativeNote.trim()),
+      isMuted: (day: HistoryDay) => day.status === 'missed' || day.status === 'pending',
+    },
+  ];
+
+  return (
+    <View>
+      <View style={styles.matrixHeaderRow}>
+        <View style={styles.matrixLabelSpacer} />
+        <View style={styles.matrixCells}>
+          {days.map((day) => (
+            <Text key={day.localDate} style={styles.matrixDayLabel}>
+              {weekdayInitial(day.localDate)}
+            </Text>
+          ))}
+        </View>
+      </View>
+      {rows.map((row) => (
+        <View key={row.label} style={styles.matrixRow}>
+          <Text numberOfLines={1} style={styles.matrixLabel}>
+            {row.label}
+          </Text>
+          <View style={styles.matrixCells}>
+            {days.map((day) => (
+              <View
+                key={`${row.label}-${day.localDate}`}
+                accessible
+                accessibilityLabel={`${row.label}, ${day.label}: ${
+                  row.isActive(day) ? 'logged' : row.isMuted(day) ? 'not logged' : 'clear'
+                }`}
+                style={[
+                  styles.matrixDot,
+                  matrixToneStyle(row.tone),
+                  row.isActive(day) && styles.matrixDotActive,
+                  row.isMuted(day) && styles.matrixDotMuted,
+                ]}
+              >
+                {row.isActive(day) ? <Text style={styles.matrixCheck}>✓</Text> : null}
+              </View>
+            ))}
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
+function RecentProgressChart({ historyDays }: { historyDays: HistoryDay[] }) {
+  const days = [...historyDays.slice(0, 7)].reverse();
+
+  return (
+    <View>
+      <View style={styles.progressPlot}>
+        <View style={styles.progressGridLineTop} />
+        <View style={styles.progressGridLineMiddle} />
+        {days.map((day) => {
+          const answered = day.status === 'yes' || day.status === 'no';
+          const strongHeight = day.status === 'yes' ? 42 : 0;
+          const softHeight = answered ? 100 : 12;
+
+          return (
+            <View key={day.localDate} style={styles.progressColumn}>
+              <View style={styles.progressBar}>
+                <View
+                  style={[
+                    styles.progressBarSoftFill,
+                    { height: `${softHeight}%` },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.progressBarStrongFill,
+                      { height: `${strongHeight}%` },
+                    ]}
+                  />
+                </View>
+              </View>
+            </View>
+          );
+        })}
+        <View style={styles.progressAxisLabels}>
+          <Text style={styles.progressAxisText}>100%</Text>
+          <Text style={styles.progressAxisText}>50%</Text>
+          <Text style={styles.progressAxisText}>0%</Text>
+        </View>
+      </View>
+      <View style={styles.progressDayRow}>
+        {days.map((day) => (
+          <Text key={day.localDate} style={styles.progressDayLabel}>
+            {weekdayShort(day.localDate)}
+          </Text>
+        ))}
+      </View>
+      <View style={styles.progressLegend}>
+        <View style={styles.legendItem}>
+          <View style={[styles.legendSwatch, styles.legendSwatchSoft]} />
+          <Text style={styles.legendText}>Check-in completed</Text>
+        </View>
+        <View style={styles.legendItem}>
+          <View style={[styles.legendSwatch, styles.legendSwatchStrong]} />
+          <Text style={styles.legendText}>Movement logged</Text>
+        </View>
+      </View>
     </View>
   );
 }
@@ -869,37 +1324,6 @@ function FrequencyBarChart({ trends }: { trends: TrendSummary }) {
           maxValue={maxValue}
         />
       ))}
-    </View>
-  );
-}
-
-function RollingTrendChart({ trends }: { trends: TrendSummary }) {
-  const maxValue = Math.max(1, ...trends.rolling7.map((point) => point.count));
-
-  if (!trends.rolling7.length) {
-    return <EmptyChart />;
-  }
-
-  return (
-    <View>
-      <View style={styles.sparkBars}>
-        {trends.rolling7.map((point) => (
-          <View
-            key={point.localDate}
-            accessibilityLabel={`${point.label}: ${point.count} in rolling 7 days`}
-            style={[
-              styles.sparkBar,
-              {
-                height: Math.max(4, Math.round((point.count / maxValue) * 58)),
-              },
-            ]}
-          />
-        ))}
-      </View>
-      <View style={styles.chartAxis}>
-        <Text style={styles.chartMeta}>30 days ago</Text>
-        <Text style={styles.chartMeta}>Today</Text>
-      </View>
     </View>
   );
 }
@@ -1170,7 +1594,15 @@ function SettingsScreen({
         </Text>
       </View>
 
-      <Pressable style={styles.deleteButton} onPress={onDeleteData}>
+      <Pressable
+        accessibilityLabel="Delete local data"
+        accessibilityRole="button"
+        style={({ pressed }) => [
+          styles.deleteButton,
+          pressed && styles.pressedControl,
+        ]}
+        onPress={onDeleteData}
+      >
         <Text style={styles.deleteButtonText}>Delete local data</Text>
       </Pressable>
     </View>
@@ -1245,9 +1677,16 @@ function PrimaryButton({
 }) {
   return (
     <Pressable
+      accessibilityLabel={label}
+      accessibilityRole="button"
+      accessibilityState={{ disabled: Boolean(disabled) }}
       disabled={disabled}
       onPress={onPress}
-      style={[styles.primaryButton, disabled && styles.disabledButton]}
+      style={({ pressed }) => [
+        styles.primaryButton,
+        pressed && styles.pressedControl,
+        disabled && styles.disabledButton,
+      ]}
     >
       <Text style={styles.primaryButtonText}>{label}</Text>
     </Pressable>
@@ -1274,15 +1713,18 @@ function SummaryMetric({
   label,
   value,
   detail,
+  tone = 'purple',
 }: {
   label: string;
   value: string;
   detail: string;
+  tone?: MetricTone;
 }) {
   return (
     <View style={styles.summaryMetric}>
-      <Text style={styles.summaryLabel}>{label}</Text>
+      <View style={[styles.metricAccent, metricToneStyle(tone)]} />
       <Text style={styles.summaryValue}>{value}</Text>
+      <Text style={styles.summaryLabel}>{label}</Text>
       <Text style={styles.summaryDetail}>{detail}</Text>
     </View>
   );
@@ -1475,6 +1917,42 @@ function historyTileStyle(status: HistoryDay['status']) {
   }[status];
 }
 
+type MetricTone =
+  | 'amber'
+  | 'blue'
+  | 'coral'
+  | 'green'
+  | 'purple'
+  | 'rose'
+  | 'slate'
+  | 'teal';
+
+function metricToneStyle(tone: MetricTone) {
+  return {
+    amber: styles.amberAccent,
+    blue: styles.blueAccent,
+    coral: styles.coralAccent,
+    green: styles.greenAccent,
+    purple: styles.purpleAccent,
+    rose: styles.roseAccent,
+    slate: styles.slateAccent,
+    teal: styles.tealAccent,
+  }[tone];
+}
+
+function matrixToneStyle(tone: MetricTone) {
+  return {
+    amber: styles.amberMatrixDot,
+    blue: styles.blueMatrixDot,
+    coral: styles.coralMatrixDot,
+    green: styles.greenMatrixDot,
+    purple: styles.purpleMatrixDot,
+    rose: styles.roseMatrixDot,
+    slate: styles.slateMatrixDot,
+    teal: styles.tealMatrixDot,
+  }[tone];
+}
+
 function bristolBarStyle(type: StoolType) {
   if (type <= 2) {
     return styles.coralBar;
@@ -1487,21 +1965,84 @@ function bristolBarStyle(type: StoolType) {
   return styles.blueBar;
 }
 
+function weekdayInitial(localDate: string): string {
+  return parseLocalDateKey(localDate)
+    .toLocaleDateString(undefined, { weekday: 'short' })
+    .slice(0, 1);
+}
+
+function profileCreatedDateKey(profileCreatedAt: string): string {
+  return getLocalDateKey(new Date(profileCreatedAt));
+}
+
+function normalizeBackfillLocalDate(value: string): string | null {
+  const trimmed = value.trim();
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return null;
+  }
+
+  const parsed = parseLocalDateKey(trimmed);
+  const normalized = getLocalDateKey(parsed);
+
+  return normalized === trimmed ? normalized : null;
+}
+
+function weekdayShort(localDate: string): string {
+  return parseLocalDateKey(localDate).toLocaleDateString(undefined, {
+    weekday: 'short',
+  });
+}
+
+function shortMonthDay(localDate: string): string {
+  return parseLocalDateKey(localDate).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+function formatRecentWeekRange(historyDays: HistoryDay[]): string {
+  const days = [...historyDays.slice(0, 7)].reverse();
+  const first = days[0];
+  const last = days[days.length - 1];
+
+  if (!first || !last) {
+    return 'Recent week';
+  }
+
+  return `${shortMonthDay(first.localDate)}-${shortMonthDay(last.localDate)}`;
+}
+
 const palette = {
-  background: '#F7F4ED',
+  background: '#F4F3FA',
   surface: '#FFFFFF',
-  surfaceAlt: '#F2F7F4',
-  ink: '#202124',
-  muted: '#66655F',
-  border: '#DDD6C8',
-  green: '#28765C',
-  mint: '#DDF0E8',
-  blue: '#2F6FBB',
-  blueSoft: '#E8F0FB',
-  coral: '#C8513E',
-  coralSoft: '#FFE8E2',
-  amber: '#93691E',
-  amberSoft: '#FFF3D7',
+  tile: '#F0F0F3',
+  tileStrong: '#E7E5F4',
+  ink: '#111217',
+  muted: '#6F6B78',
+  softText: '#8E8996',
+  border: '#E5E3EC',
+  purple: '#5E4CF3',
+  purpleSoft: '#C9C3FF',
+  purpleFaint: '#EFEDFF',
+  green: '#2FBF6D',
+  mint: '#DDF7E9',
+  blue: '#2387E8',
+  blueSoft: '#E5F2FF',
+  teal: '#0891B2',
+  tealSoft: '#DDF8FB',
+  coral: '#F3414B',
+  coralSoft: '#FFE6E8',
+  amber: '#FF922E',
+  amberSoft: '#FFF0DF',
+  rose: '#E7346B',
+  roseSoft: '#FFE8F0',
+  slate: '#69657B',
+  slateSoft: '#ECEAF2',
+};
+
+const cardShadow = {
+  boxShadow: '0 10px 22px rgba(77, 70, 95, 0.08)',
 };
 
 const styles = StyleSheet.create({
@@ -1515,12 +2056,15 @@ const styles = StyleSheet.create({
     paddingTop: 12,
   },
   header: {
-    paddingVertical: 14,
+    alignItems: 'center',
+    paddingBottom: 14,
+    paddingTop: 10,
   },
   appName: {
     color: palette.ink,
     fontSize: 28,
-    fontWeight: '800',
+    fontWeight: '900',
+    textAlign: 'center',
   },
   appNameLarge: {
     color: palette.ink,
@@ -1528,9 +2072,11 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   headerMeta: {
-    color: palette.muted,
+    color: palette.softText,
     fontSize: 14,
-    marginTop: 4,
+    fontWeight: '700',
+    marginTop: 5,
+    textAlign: 'center',
   },
   subtitle: {
     color: palette.muted,
@@ -1539,35 +2085,39 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   tabs: {
-    backgroundColor: palette.surface,
+    backgroundColor: 'rgba(255,255,255,0.72)',
     borderColor: palette.border,
-    borderRadius: 8,
+    borderRadius: 24,
     borderWidth: 1,
     flexDirection: 'row',
-    marginBottom: 12,
-    padding: 4,
+    marginBottom: 14,
+    padding: 5,
+    ...cardShadow,
   },
   tabButton: {
     alignItems: 'center',
-    borderRadius: 6,
+    borderRadius: 18,
     flex: 1,
-    minHeight: 42,
+    minHeight: 44,
     justifyContent: 'center',
     paddingHorizontal: 4,
   },
   activeTabButton: {
-    backgroundColor: palette.ink,
+    backgroundColor: palette.purple,
+  },
+  pressedControl: {
+    opacity: 0.78,
   },
   tabText: {
-    color: palette.muted,
+    color: palette.softText,
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: '800',
   },
   activeTabText: {
     color: palette.surface,
   },
   content: {
-    paddingBottom: 28,
+    paddingBottom: 34,
   },
   loadingScreen: {
     alignItems: 'center',
@@ -1578,6 +2128,7 @@ const styles = StyleSheet.create({
   loadingText: {
     color: palette.muted,
     fontSize: 16,
+    fontWeight: '700',
     marginTop: 14,
   },
   onboardingShell: {
@@ -1591,33 +2142,38 @@ const styles = StyleSheet.create({
     marginBottom: 22,
     marginTop: 20,
   },
+  recordsPanel: {
+    backgroundColor: palette.surface,
+    borderRadius: 28,
+    marginBottom: 24,
+    padding: 16,
+    ...cardShadow,
+  },
   panel: {
     backgroundColor: palette.surface,
-    borderColor: palette.border,
-    borderRadius: 8,
-    borderWidth: 1,
-    marginBottom: 14,
+    borderRadius: 28,
+    marginBottom: 24,
     padding: 16,
+    ...cardShadow,
   },
   heroPanel: {
     backgroundColor: palette.surface,
-    borderColor: palette.border,
-    borderRadius: 8,
-    borderWidth: 1,
-    marginBottom: 14,
+    borderRadius: 28,
+    marginBottom: 16,
     padding: 18,
+    ...cardShadow,
   },
   wellnessPanel: {
-    backgroundColor: palette.surfaceAlt,
-    borderColor: palette.border,
-    borderRadius: 8,
-    borderWidth: 1,
+    backgroundColor: palette.surface,
+    borderRadius: 24,
+    marginBottom: 14,
     padding: 16,
+    ...cardShadow,
   },
   kicker: {
-    color: palette.blue,
+    color: palette.purple,
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '900',
     marginBottom: 8,
     textTransform: 'uppercase',
   },
@@ -1635,7 +2191,7 @@ const styles = StyleSheet.create({
   },
   answerButton: {
     alignItems: 'center',
-    borderRadius: 8,
+    borderRadius: 20,
     borderWidth: 1,
     flex: 1,
     justifyContent: 'center',
@@ -1673,7 +2229,7 @@ const styles = StyleSheet.create({
   sectionLabel: {
     color: palette.ink,
     fontSize: 15,
-    fontWeight: '800',
+    fontWeight: '900',
     marginBottom: 10,
   },
   stoolGrid: {
@@ -1682,18 +2238,18 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   stoolButton: {
-    backgroundColor: '#FFFEFB',
+    backgroundColor: palette.tile,
     borderColor: palette.border,
-    borderRadius: 8,
+    borderRadius: 18,
     borderWidth: 1,
     flexBasis: '48%',
     flexGrow: 1,
     minHeight: 78,
-    padding: 10,
+    padding: 11,
   },
   selectedStoolButton: {
-    backgroundColor: palette.ink,
-    borderColor: palette.ink,
+    backgroundColor: palette.purple,
+    borderColor: palette.purple,
   },
   stoolButtonLabel: {
     color: palette.ink,
@@ -1710,11 +2266,42 @@ const styles = StyleSheet.create({
   selectedStoolText: {
     color: palette.surface,
   },
-  panelTitle: {
-    color: palette.ink,
+  sectionHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+    paddingHorizontal: 2,
+  },
+  sectionTitle: {
+    color: palette.muted,
+    flex: 1,
+    fontSize: 26,
+    fontWeight: '900',
+  },
+  sectionRange: {
+    color: palette.purple,
     fontSize: 18,
     fontWeight: '800',
-    marginBottom: 12,
+    textAlign: 'right',
+  },
+  chartCardHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  rangeText: {
+    color: palette.purple,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  panelTitle: {
+    color: palette.ink,
+    flex: 1,
+    fontSize: 18,
+    fontWeight: '900',
   },
   bodyText: {
     color: palette.muted,
@@ -1723,8 +2310,8 @@ const styles = StyleSheet.create({
   },
   privacyBox: {
     backgroundColor: palette.blueSoft,
-    borderColor: '#CAD8EA',
-    borderRadius: 8,
+    borderColor: '#C8E2FF',
+    borderRadius: 22,
     borderWidth: 1,
     marginBottom: 14,
     padding: 16,
@@ -1732,7 +2319,7 @@ const styles = StyleSheet.create({
   privacyTitle: {
     color: palette.blue,
     fontSize: 16,
-    fontWeight: '800',
+    fontWeight: '900',
     marginBottom: 8,
   },
   inputGroup: {
@@ -1741,19 +2328,22 @@ const styles = StyleSheet.create({
   inputLabel: {
     color: palette.ink,
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '800',
     marginBottom: 7,
   },
   input: {
-    backgroundColor: '#FFFEFB',
+    backgroundColor: palette.tile,
     borderColor: palette.border,
-    borderRadius: 8,
+    borderRadius: 18,
     borderWidth: 1,
     color: palette.ink,
     fontSize: 16,
     minHeight: 48,
     paddingHorizontal: 12,
     paddingVertical: 10,
+  },
+  backfillForm: {
+    marginTop: 14,
   },
   toggleRow: {
     alignItems: 'center',
@@ -1767,13 +2357,13 @@ const styles = StyleSheet.create({
     color: palette.ink,
     flex: 1,
     fontSize: 15,
-    fontWeight: '700',
+    fontWeight: '800',
     paddingRight: 12,
   },
   primaryButton: {
     alignItems: 'center',
-    backgroundColor: palette.ink,
-    borderRadius: 8,
+    backgroundColor: palette.purple,
+    borderRadius: 20,
     justifyContent: 'center',
     minHeight: 52,
     paddingHorizontal: 16,
@@ -1784,12 +2374,12 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     color: palette.surface,
     fontSize: 16,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   deleteButton: {
     alignItems: 'center',
     borderColor: palette.coral,
-    borderRadius: 8,
+    borderRadius: 20,
     borderWidth: 1,
     justifyContent: 'center',
     minHeight: 50,
@@ -1797,16 +2387,16 @@ const styles = StyleSheet.create({
   deleteButtonText: {
     color: palette.coral,
     fontSize: 16,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   notice: {
-    backgroundColor: palette.blueSoft,
-    borderColor: '#CAD8EA',
-    borderRadius: 8,
+    backgroundColor: palette.purpleFaint,
+    borderColor: palette.purpleSoft,
+    borderRadius: 18,
     borderWidth: 1,
-    color: palette.blue,
+    color: palette.purple,
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '800',
     lineHeight: 20,
     marginBottom: 12,
     padding: 12,
@@ -1814,111 +2404,116 @@ const styles = StyleSheet.create({
   errorText: {
     color: palette.coral,
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '800',
     marginBottom: 12,
   },
   statusPill: {
     alignSelf: 'flex-start',
-    borderRadius: 8,
+    borderRadius: 999,
     borderWidth: 1,
     minHeight: 34,
     justifyContent: 'center',
-    paddingHorizontal: 10,
+    paddingHorizontal: 12,
   },
   statusPillText: {
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   greenPill: {
     backgroundColor: palette.mint,
     borderColor: palette.green,
   },
   greenPillText: {
-    color: palette.green,
+    color: '#16713F',
   },
   coralPill: {
     backgroundColor: palette.coralSoft,
     borderColor: palette.coral,
   },
   coralPillText: {
-    color: palette.coral,
+    color: '#B51723',
   },
   amberPill: {
     backgroundColor: palette.amberSoft,
     borderColor: palette.amber,
   },
   amberPillText: {
-    color: palette.amber,
+    color: '#9A5300',
   },
   bluePill: {
     backgroundColor: palette.blueSoft,
     borderColor: palette.blue,
   },
   bluePillText: {
-    color: palette.blue,
+    color: '#1264B2',
   },
   historyStrip: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 6,
+    gap: 9,
   },
   historyTile: {
     alignItems: 'center',
-    borderRadius: 8,
-    borderWidth: 1,
-    height: 58,
+    backgroundColor: palette.surface,
+    borderRadius: 22,
+    borderWidth: 4,
+    height: 44,
     justifyContent: 'center',
-    width: 38,
+    width: 44,
   },
   greenTile: {
-    backgroundColor: palette.mint,
-    borderColor: palette.green,
+    borderColor: palette.purple,
   },
   coralTile: {
-    backgroundColor: palette.coralSoft,
     borderColor: palette.coral,
   },
   amberTile: {
-    backgroundColor: palette.amberSoft,
     borderColor: palette.amber,
   },
   blueTile: {
-    backgroundColor: palette.blueSoft,
-    borderColor: palette.blue,
+    borderColor: palette.purpleSoft,
+  },
+  preProfileTile: {
+    backgroundColor: '#F7F7FA',
+    borderColor: '#D8D5E0',
+  },
+  preProfileTileText: {
+    color: palette.softText,
   },
   historyTileDate: {
     color: palette.ink,
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '900',
+    fontVariant: ['tabular-nums'],
   },
   historyTileStatus: {
-    color: palette.ink,
-    fontSize: 12,
+    color: palette.softText,
+    fontSize: 9,
     fontWeight: '900',
-    marginTop: 1,
+    marginTop: -1,
   },
   historyTileMeta: {
-    color: palette.muted,
-    fontSize: 10,
+    color: palette.purple,
+    fontSize: 8,
     fontWeight: '900',
-    marginTop: 1,
+    marginTop: -1,
   },
   tileMarkerRow: {
     flexDirection: 'row',
     gap: 2,
-    minHeight: 11,
+    minHeight: 8,
   },
   tileMarker: {
     color: palette.blue,
-    fontSize: 9,
+    fontSize: 7,
     fontWeight: '900',
   },
   gapList: {
     gap: 6,
-    marginTop: 12,
+    marginTop: 14,
   },
   gapText: {
-    color: palette.amber,
+    color: '#9A5300',
     fontSize: 13,
     fontWeight: '800',
     lineHeight: 18,
@@ -1929,8 +2524,8 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    minHeight: 64,
-    paddingVertical: 10,
+    minHeight: 66,
+    paddingVertical: 11,
   },
   historyDateBlock: {
     flex: 1,
@@ -1939,10 +2534,10 @@ const styles = StyleSheet.create({
   historyLabel: {
     color: palette.ink,
     fontSize: 16,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   historyDate: {
-    color: palette.muted,
+    color: palette.softText,
     fontSize: 13,
     marginTop: 2,
   },
@@ -1959,29 +2554,41 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   summaryMetric: {
-    borderTopColor: palette.border,
-    borderTopWidth: 1,
+    backgroundColor: palette.tile,
+    borderRadius: 20,
     flexBasis: '47%',
     flexGrow: 1,
-    minHeight: 96,
-    paddingTop: 12,
+    minHeight: 112,
+    overflow: 'hidden',
+    padding: 14,
+  },
+  metricAccent: {
+    alignSelf: 'flex-end',
+    borderRadius: 6,
+    height: 22,
+    marginBottom: 2,
+    width: 22,
   },
   summaryLabel: {
     color: palette.muted,
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '900',
+    marginTop: 3,
+    textTransform: 'uppercase',
   },
   summaryValue: {
     color: palette.ink,
     fontSize: 30,
     fontWeight: '900',
-    marginTop: 6,
+    fontVariant: ['tabular-nums'],
+    textAlign: 'center',
   },
   summaryDetail: {
-    color: palette.muted,
-    fontSize: 14,
-    fontWeight: '700',
-    marginTop: 4,
+    color: palette.softText,
+    fontSize: 13,
+    fontWeight: '800',
+    marginTop: 3,
+    textAlign: 'center',
   },
   statLine: {
     alignItems: 'center',
@@ -1995,51 +2602,51 @@ const styles = StyleSheet.create({
     color: palette.ink,
     fontSize: 20,
     fontWeight: '900',
+    fontVariant: ['tabular-nums'],
   },
   chartRow: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 10,
-    minHeight: 38,
+    minHeight: 40,
   },
   chartLabel: {
     color: palette.ink,
     flexBasis: 84,
     flexShrink: 0,
     fontSize: 12,
-    fontWeight: '800',
+    fontWeight: '900',
   },
   chartValue: {
     color: palette.ink,
     flexBasis: 34,
     fontSize: 13,
     fontWeight: '900',
+    fontVariant: ['tabular-nums'],
     textAlign: 'right',
   },
   chartMeta: {
-    color: palette.muted,
+    color: palette.softText,
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
     lineHeight: 18,
   },
   chartEmptyText: {
     color: palette.muted,
     fontSize: 14,
-    fontWeight: '700',
+    fontWeight: '800',
     lineHeight: 20,
   },
   barTrack: {
-    backgroundColor: palette.surfaceAlt,
-    borderColor: palette.border,
-    borderRadius: 8,
-    borderWidth: 1,
+    backgroundColor: palette.tile,
+    borderRadius: 999,
     flex: 1,
-    height: 14,
+    height: 16,
     overflow: 'hidden',
   },
   barFill: {
-    backgroundColor: palette.green,
-    borderRadius: 8,
+    backgroundColor: palette.purple,
+    borderRadius: 999,
     height: '100%',
   },
   referenceRow: {
@@ -2049,9 +2656,8 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   referenceFill: {
-    backgroundColor: palette.amber,
+    backgroundColor: palette.purpleSoft,
     height: '100%',
-    opacity: 0.72,
   },
   coralBar: {
     backgroundColor: palette.coral,
@@ -2062,18 +2668,6 @@ const styles = StyleSheet.create({
   blueBar: {
     backgroundColor: palette.blue,
   },
-  sparkBars: {
-    alignItems: 'flex-end',
-    flexDirection: 'row',
-    gap: 3,
-    height: 66,
-  },
-  sparkBar: {
-    backgroundColor: palette.blue,
-    borderRadius: 4,
-    flex: 1,
-    minWidth: 4,
-  },
   chartAxis: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2083,7 +2677,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: 3,
-    minHeight: 28,
+    minHeight: 32,
   },
   timelineDay: {
     alignItems: 'center',
@@ -2093,23 +2687,224 @@ const styles = StyleSheet.create({
   timelineDot: {
     backgroundColor: palette.border,
     borderRadius: 5,
-    height: 9,
-    width: 9,
+    height: 10,
+    width: 10,
   },
   timelineDotActive: {
-    backgroundColor: palette.ink,
+    backgroundColor: palette.purple,
   },
   completionTrack: {
-    backgroundColor: palette.amberSoft,
-    borderColor: palette.border,
-    borderRadius: 8,
-    borderWidth: 1,
+    backgroundColor: palette.tile,
+    borderRadius: 999,
     height: 18,
     marginBottom: 10,
     overflow: 'hidden',
   },
   completionFill: {
-    backgroundColor: palette.green,
+    backgroundColor: palette.purple,
     height: '100%',
+  },
+  amberAccent: {
+    backgroundColor: palette.amber,
+  },
+  blueAccent: {
+    backgroundColor: palette.blue,
+  },
+  coralAccent: {
+    backgroundColor: palette.coral,
+  },
+  greenAccent: {
+    backgroundColor: palette.green,
+  },
+  purpleAccent: {
+    backgroundColor: palette.purple,
+  },
+  roseAccent: {
+    backgroundColor: palette.rose,
+  },
+  slateAccent: {
+    backgroundColor: palette.slate,
+  },
+  tealAccent: {
+    backgroundColor: palette.teal,
+  },
+  matrixHeaderRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    marginBottom: 8,
+  },
+  matrixLabelSpacer: {
+    width: 92,
+  },
+  matrixCells: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: 210,
+  },
+  matrixDayLabel: {
+    color: palette.softText,
+    fontSize: 14,
+    fontWeight: '800',
+    textAlign: 'center',
+    width: 24,
+  },
+  matrixRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    minHeight: 40,
+  },
+  matrixLabel: {
+    color: palette.ink,
+    fontSize: 14,
+    fontWeight: '800',
+    paddingRight: 8,
+    width: 92,
+  },
+  matrixDot: {
+    alignItems: 'center',
+    backgroundColor: palette.surface,
+    borderRadius: 12,
+    borderWidth: 3,
+    height: 24,
+    justifyContent: 'center',
+    width: 24,
+  },
+  matrixDotActive: {
+    backgroundColor: palette.green,
+    borderColor: palette.green,
+  },
+  matrixDotMuted: {
+    backgroundColor: palette.border,
+    borderColor: palette.border,
+  },
+  matrixCheck: {
+    color: palette.surface,
+    fontSize: 15,
+    fontWeight: '900',
+    lineHeight: 18,
+  },
+  amberMatrixDot: {
+    borderColor: palette.amberSoft,
+  },
+  blueMatrixDot: {
+    borderColor: palette.blueSoft,
+  },
+  coralMatrixDot: {
+    borderColor: palette.coralSoft,
+  },
+  greenMatrixDot: {
+    borderColor: palette.mint,
+  },
+  purpleMatrixDot: {
+    borderColor: palette.purpleSoft,
+  },
+  roseMatrixDot: {
+    borderColor: palette.roseSoft,
+  },
+  slateMatrixDot: {
+    borderColor: palette.slateSoft,
+  },
+  tealMatrixDot: {
+    borderColor: palette.tealSoft,
+  },
+  progressPlot: {
+    borderBottomColor: palette.border,
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    height: 190,
+    marginRight: 30,
+    paddingHorizontal: 8,
+    position: 'relative',
+  },
+  progressGridLineTop: {
+    backgroundColor: palette.border,
+    height: 1,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 20,
+  },
+  progressGridLineMiddle: {
+    backgroundColor: palette.border,
+    height: 1,
+    left: 0,
+    position: 'absolute',
+    right: 0,
+    top: 100,
+  },
+  progressColumn: {
+    alignItems: 'center',
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  progressBar: {
+    backgroundColor: palette.tile,
+    borderTopLeftRadius: 5,
+    borderTopRightRadius: 5,
+    height: 160,
+    justifyContent: 'flex-end',
+    overflow: 'hidden',
+    width: 28,
+  },
+  progressBarSoftFill: {
+    backgroundColor: palette.purpleSoft,
+    justifyContent: 'flex-end',
+    width: '100%',
+  },
+  progressBarStrongFill: {
+    backgroundColor: palette.purple,
+    width: '100%',
+  },
+  progressAxisLabels: {
+    bottom: -9,
+    justifyContent: 'space-between',
+    position: 'absolute',
+    right: -42,
+    top: 10,
+  },
+  progressAxisText: {
+    color: palette.softText,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  progressDayRow: {
+    flexDirection: 'row',
+    marginRight: 30,
+    paddingHorizontal: 8,
+    paddingTop: 8,
+  },
+  progressDayLabel: {
+    color: palette.muted,
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  progressLegend: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginTop: 14,
+  },
+  legendItem: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 6,
+  },
+  legendSwatch: {
+    borderRadius: 5,
+    height: 10,
+    width: 18,
+  },
+  legendSwatchSoft: {
+    backgroundColor: palette.purpleSoft,
+  },
+  legendSwatchStrong: {
+    backgroundColor: palette.purple,
+  },
+  legendText: {
+    color: palette.muted,
+    fontSize: 12,
+    fontWeight: '800',
   },
 });
