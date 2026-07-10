@@ -44,7 +44,10 @@ import {
   filterHistoryDaysForProfile,
   summarizeTrends,
 } from './src/lib/trends';
-import { getDailyLogSuccessMessage } from './src/lib/dailyLogFeedback';
+import {
+  getDailyLogSuccessMessage,
+  isDailyLogSuccessMessage,
+} from './src/lib/dailyLogFeedback';
 import type {
   DailyEntry,
   DailyEntryInput,
@@ -62,8 +65,6 @@ const tabs: { key: TabKey; label: string }[] = [
   { key: 'trends', label: 'Trends' },
   { key: 'settings', label: 'Settings' },
 ];
-
-const dailyLogSuccessMessage = getDailyLogSuccessMessage();
 
 const emptySymptoms: DailySymptoms = {
   straining: false,
@@ -152,7 +153,9 @@ export default function App() {
   }, []);
 
   async function refreshEntries() {
-    setEntries(await getEntries(30));
+    const nextEntries = await getEntries(30);
+    setEntries(nextEntries);
+    return nextEntries;
   }
 
   async function handleProfileCreated(nextProfile: Profile) {
@@ -175,9 +178,14 @@ export default function App() {
     }
 
     const entry = await upsertDailyEntry(today, input);
-    await refreshEntries();
+    const nextEntries = await refreshEntries();
     await syncNotificationsAfterEntry(profile, entry);
-    setNotice(dailyLogSuccessMessage);
+    setNotice(
+      getDailyLogSuccessMessage(nextEntries, {
+        today,
+        loggedAt: new Date(entry.checkedInAt),
+      }),
+    );
     setNoticeKey((current) => current + 1);
   }
 
@@ -301,7 +309,7 @@ export default function App() {
         </View>
 
         {notice ? (
-          notice === dailyLogSuccessMessage ? (
+          isDailyLogSuccessMessage(notice) ? (
             <SuccessNotice key={noticeKey} message={notice} />
           ) : (
             <Text style={styles.notice}>{notice}</Text>
@@ -388,6 +396,7 @@ function SuccessNotice({ message }: { message: string }) {
   const reduceMotion = useReduceMotionPreference();
   const entrance = useRef(new Animated.Value(1)).current;
   const spin = useRef(new Animated.Value(0)).current;
+  const useNativeDriver = Platform.OS !== 'web';
 
   useEffect(() => {
     entrance.stopAnimation();
@@ -403,9 +412,9 @@ function SuccessNotice({ message }: { message: string }) {
       damping: 14,
       mass: 0.8,
       stiffness: 160,
-      useNativeDriver: true,
+      useNativeDriver,
     }).start();
-  }, [entrance, message, reduceMotion]);
+  }, [entrance, message, reduceMotion, useNativeDriver]);
 
   useEffect(() => {
     spin.stopAnimation();
@@ -420,7 +429,7 @@ function SuccessNotice({ message }: { message: string }) {
         toValue: 1,
         duration: 3200,
         easing: Easing.linear,
-        useNativeDriver: true,
+        useNativeDriver,
       }),
     );
 
@@ -429,7 +438,7 @@ function SuccessNotice({ message }: { message: string }) {
     return () => {
       animation.stop();
     };
-  }, [message, reduceMotion, spin]);
+  }, [message, reduceMotion, spin, useNativeDriver]);
 
   const entranceStyle = reduceMotion
     ? null
@@ -470,8 +479,7 @@ function SuccessNotice({ message }: { message: string }) {
       style={[styles.successNoticeShell, entranceStyle]}
     >
       <Animated.View
-        pointerEvents="none"
-        style={[styles.successNoticeGlow, spinStyle]}
+        style={[styles.successNoticeGlow, styles.nonInteractive, spinStyle]}
       >
         <View
           style={[styles.successNoticeGlowPatch, styles.successNoticeGlowMint]}
@@ -2567,6 +2575,9 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: -90,
     top: -160,
+  },
+  nonInteractive: {
+    pointerEvents: 'none',
   },
   successNoticeGlowPatch: {
     borderRadius: 999,
