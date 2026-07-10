@@ -54,6 +54,7 @@ import {
   getDailyOpenLoveNotice,
   isDailyOpenLoveNoticeMessage,
 } from './src/lib/dailyOpenNotice';
+import { getFallbackWellnessNote } from './src/lib/wellnessNotes';
 import type {
   DailyEntry,
   DailyEntryInput,
@@ -380,6 +381,7 @@ export default function App() {
             <TodayScreen
               entry={todayEntry}
               includeTodayAsMissed={includeTodayAsMissed}
+              localDate={today}
               onLog={handleLog}
             />
           ) : null}
@@ -672,10 +674,12 @@ function OnboardingScreen({
 function TodayScreen({
   entry,
   includeTodayAsMissed,
+  localDate,
   onLog,
 }: {
   entry: DailyEntry | null;
   includeTodayAsMissed: boolean;
+  localDate: string;
   onLog: (input: DailyEntryInput) => Promise<void>;
 }) {
   const [hadBowelMovement, setHadBowelMovement] = useState<boolean | null>(
@@ -758,6 +762,7 @@ function TodayScreen({
     : includeTodayAsMissed
       ? 'Not checked in yet'
       : 'Ready when you are';
+  const wellnessNote = getFallbackWellnessNote(localDate);
 
   return (
     <View>
@@ -913,10 +918,7 @@ function TodayScreen({
 
       <View style={styles.wellnessPanel}>
         <Text style={styles.panelTitle}>Gentle wellness note</Text>
-        <Text style={styles.bodyText}>
-          Hydration, fiber-rich foods, and any doctor-approved routine can
-          support regularity.
-        </Text>
+        <Text style={styles.bodyText}>{wellnessNote}</Text>
       </View>
     </View>
   );
