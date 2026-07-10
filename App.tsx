@@ -48,6 +48,10 @@ import {
   getDailyLogSuccessMessage,
   isDailyLogSuccessMessage,
 } from './src/lib/dailyLogFeedback';
+import {
+  getDailyOpenLoveNotice,
+  isDailyOpenLoveNoticeMessage,
+} from './src/lib/dailyOpenNotice';
 import type {
   DailyEntry,
   DailyEntryInput,
@@ -141,14 +145,28 @@ export default function App() {
       await configureNotificationBehavior();
       const storedProfile = await getProfile();
       const storedEntries = await getEntries(entryLoadLimit);
+      const dailyOpenNotice = storedProfile
+        ? getDailyOpenLoveNotice(storedProfile, today)
+        : null;
+      const nextProfile =
+        storedProfile && dailyOpenNotice
+          ? await saveProfile({
+              ...storedProfile,
+              dailyOpenLoveShownDate: dailyOpenNotice.shownDate,
+            })
+          : storedProfile;
 
-      if (storedProfile?.remindersEnabled) {
-        await rescheduleProfileNotifications(storedProfile);
+      if (nextProfile?.remindersEnabled) {
+        await rescheduleProfileNotifications(nextProfile);
       }
 
       if (!cancelled) {
-        setProfile(storedProfile);
+        setProfile(nextProfile);
         setEntries(storedEntries);
+        if (dailyOpenNotice) {
+          setNotice(dailyOpenNotice.message);
+          setNoticeKey((current) => current + 1);
+        }
         setReady(true);
       }
     }
@@ -320,8 +338,17 @@ export default function App() {
         </View>
 
         {notice ? (
-          isDailyLogSuccessMessage(notice) ? (
-            <SuccessNotice key={noticeKey} message={notice} />
+          isDailyLogSuccessMessage(notice) ||
+          isDailyOpenLoveNoticeMessage(notice) ? (
+            <SuccessNotice
+              key={noticeKey}
+              title={
+                isDailyOpenLoveNoticeMessage(notice)
+                  ? 'Welcome back'
+                  : 'Daily check-in saved'
+              }
+              message={notice}
+            />
           ) : (
             <Text style={styles.notice}>{notice}</Text>
           )
@@ -402,7 +429,7 @@ function useReduceMotionPreference() {
   return reduceMotion;
 }
 
-function SuccessNotice({ message }: { message: string }) {
+function SuccessNotice({ title, message }: { title: string; message: string }) {
   const reduceMotion = useReduceMotionPreference();
   const entrance = useRef(new Animated.Value(1)).current;
   const spin = useRef(new Animated.Value(0)).current;
@@ -508,7 +535,7 @@ function SuccessNotice({ message }: { message: string }) {
         />
       </Animated.View>
       <View style={styles.successNoticeInner}>
-        <Text style={styles.successNoticeTitle}>Daily check-in saved</Text>
+        <Text style={styles.successNoticeTitle}>{title}</Text>
         <Text style={styles.successNoticeText}>{message}</Text>
       </View>
     </Animated.View>

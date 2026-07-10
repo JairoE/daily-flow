@@ -20,6 +20,7 @@ type ProfileRow = {
   reminders_enabled: number;
   private_notifications: number;
   privacy_lock_enabled: number;
+  daily_open_love_shown_date: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -59,6 +60,7 @@ CREATE TABLE IF NOT EXISTS profile (
   reminders_enabled INTEGER NOT NULL,
   private_notifications INTEGER NOT NULL,
   privacy_lock_enabled INTEGER NOT NULL,
+  daily_open_love_shown_date TEXT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -101,6 +103,13 @@ const defaultSymptoms: DailySymptoms = {
   bloating: false,
   incompleteEvacuation: false,
 };
+
+const profileMigrations: { name: string; sql: string }[] = [
+  {
+    name: 'daily_open_love_shown_date',
+    sql: 'ALTER TABLE profile ADD COLUMN daily_open_love_shown_date TEXT NULL',
+  },
+];
 
 const dailyEntryMigrations: { name: string; sql: string }[] = [
   {
@@ -186,10 +195,24 @@ async function migrateDailyEntryColumns(db: SQLite.SQLiteDatabase) {
   }
 }
 
+async function migrateProfileColumns(db: SQLite.SQLiteDatabase) {
+  const columns = await db.getAllAsync<{ name: string }>(
+    'PRAGMA table_info(profile)',
+  );
+  const existingColumns = new Set(columns.map((column) => column.name));
+
+  for (const migration of profileMigrations) {
+    if (!existingColumns.has(migration.name)) {
+      await db.execAsync(migration.sql);
+    }
+  }
+}
+
 async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
     dbPromise = SQLite.openDatabaseAsync('daily-flow.db').then(async (db) => {
       await db.execAsync(schema);
+      await migrateProfileColumns(db);
       await migrateDailyEntryColumns(db);
       return db;
     });
@@ -207,6 +230,7 @@ function mapProfile(row: ProfileRow): Profile {
     remindersEnabled: row.reminders_enabled === 1,
     privateNotifications: row.private_notifications === 1,
     privacyLockEnabled: row.privacy_lock_enabled === 1,
+    dailyOpenLoveShownDate: row.daily_open_love_shown_date ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -264,6 +288,7 @@ export function createProfile(values: {
     remindersEnabled: values.remindersEnabled,
     privateNotifications: values.privateNotifications,
     privacyLockEnabled: false,
+    dailyOpenLoveShownDate: null,
     createdAt: now,
     updatedAt: now,
   };
@@ -294,9 +319,10 @@ export async function saveProfile(profile: Profile): Promise<Profile> {
       reminders_enabled,
       private_notifications,
       privacy_lock_enabled,
+      daily_open_love_shown_date,
       created_at,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       display_name = excluded.display_name,
       timezone = excluded.timezone,
@@ -304,6 +330,7 @@ export async function saveProfile(profile: Profile): Promise<Profile> {
       reminders_enabled = excluded.reminders_enabled,
       private_notifications = excluded.private_notifications,
       privacy_lock_enabled = excluded.privacy_lock_enabled,
+      daily_open_love_shown_date = excluded.daily_open_love_shown_date,
       updated_at = excluded.updated_at`,
     [
       nextProfile.id,
@@ -313,6 +340,7 @@ export async function saveProfile(profile: Profile): Promise<Profile> {
       nextProfile.remindersEnabled ? 1 : 0,
       nextProfile.privateNotifications ? 1 : 0,
       nextProfile.privacyLockEnabled ? 1 : 0,
+      nextProfile.dailyOpenLoveShownDate,
       nextProfile.createdAt,
       nextProfile.updatedAt,
     ],

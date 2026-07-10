@@ -69,6 +69,17 @@ function normalizeEntry(rawEntry: DailyEntry): DailyEntry {
   };
 }
 
+function normalizeProfile(rawProfile: Profile | null | undefined): Profile | null {
+  if (!rawProfile) {
+    return null;
+  }
+
+  return {
+    ...rawProfile,
+    dailyOpenLoveShownDate: rawProfile.dailyOpenLoveShownDate ?? null,
+  };
+}
+
 function normalizeEntryInput(input: DailyEntryInput) {
   return {
     hadBowelMovement: input.hadBowelMovement,
@@ -102,7 +113,7 @@ function readState(): WebState {
     const state = parsed as WebState;
 
     return {
-      profile: state.profile ?? null,
+      profile: normalizeProfile(state.profile),
       entries: Array.isArray(state.entries)
         ? state.entries.map(normalizeEntry)
         : [],
@@ -141,6 +152,7 @@ export function createProfile(values: {
     remindersEnabled: values.remindersEnabled,
     privateNotifications: values.privateNotifications,
     privacyLockEnabled: false,
+    dailyOpenLoveShownDate: null,
     createdAt: now,
     updatedAt: now,
   };

@@ -6,6 +6,7 @@ export type Profile = {
   remindersEnabled: boolean;
   privateNotifications: boolean;
   privacyLockEnabled: boolean;
+  dailyOpenLoveShownDate: string | null;
   createdAt: string;
   updatedAt: string;
 };
