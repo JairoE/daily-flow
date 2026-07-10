@@ -1,8 +1,11 @@
 import { StatusBar } from 'expo-status-bar';
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
+  Animated,
+  Easing,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -41,6 +44,7 @@ import {
   filterHistoryDaysForProfile,
   summarizeTrends,
 } from './src/lib/trends';
+import { getDailyLogSuccessMessage } from './src/lib/dailyLogFeedback';
 import type {
   DailyEntry,
   DailyEntryInput,
@@ -58,6 +62,8 @@ const tabs: { key: TabKey; label: string }[] = [
   { key: 'trends', label: 'Trends' },
   { key: 'settings', label: 'Settings' },
 ];
+
+const dailyLogSuccessMessage = getDailyLogSuccessMessage();
 
 const emptySymptoms: DailySymptoms = {
   straining: false,
@@ -89,6 +95,7 @@ export default function App() {
   const [entries, setEntries] = useState<DailyEntry[]>([]);
   const [activeTab, setActiveTab] = useState<TabKey>('today');
   const [notice, setNotice] = useState('');
+  const [noticeKey, setNoticeKey] = useState(0);
 
   const today = getLocalDateKey();
   const includeTodayAsMissed = profile
@@ -170,11 +177,8 @@ export default function App() {
     const entry = await upsertDailyEntry(today, input);
     await refreshEntries();
     await syncNotificationsAfterEntry(profile, entry);
-    setNotice(
-      input.hadBowelMovement
-        ? 'Logged for today.'
-        : 'Logged for today. Gentle wellness language will stay non-medical.',
-    );
+    setNotice(dailyLogSuccessMessage);
+    setNoticeKey((current) => current + 1);
   }
 
   async function handleLogForDate(localDate: string, input: DailyEntryInput) {
@@ -296,7 +300,13 @@ export default function App() {
           ))}
         </View>
 
-        {notice ? <Text style={styles.notice}>{notice}</Text> : null}
+        {notice ? (
+          notice === dailyLogSuccessMessage ? (
+            <SuccessNotice key={noticeKey} message={notice} />
+          ) : (
+            <Text style={styles.notice}>{notice}</Text>
+          )
+        ) : null}
 
         <ScrollView
           contentContainerStyle={styles.content}
@@ -343,6 +353,147 @@ function LoadingScreen() {
         <Text style={styles.loadingText}>Opening Daily Flow</Text>
       </View>
     </SafeAreaView>
+  );
+}
+
+function useReduceMotionPreference() {
+  const [reduceMotion, setReduceMotion] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((enabled) => {
+        if (mounted) {
+          setReduceMotion(enabled);
+        }
+      })
+      .catch(() => undefined);
+
+    const subscription = AccessibilityInfo.addEventListener(
+      'reduceMotionChanged',
+      setReduceMotion,
+    );
+
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
+  }, []);
+
+  return reduceMotion;
+}
+
+function SuccessNotice({ message }: { message: string }) {
+  const reduceMotion = useReduceMotionPreference();
+  const entrance = useRef(new Animated.Value(1)).current;
+  const spin = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    entrance.stopAnimation();
+
+    if (reduceMotion) {
+      entrance.setValue(1);
+      return;
+    }
+
+    entrance.setValue(0);
+    Animated.spring(entrance, {
+      toValue: 1,
+      damping: 14,
+      mass: 0.8,
+      stiffness: 160,
+      useNativeDriver: true,
+    }).start();
+  }, [entrance, message, reduceMotion]);
+
+  useEffect(() => {
+    spin.stopAnimation();
+    spin.setValue(0);
+
+    if (reduceMotion) {
+      return;
+    }
+
+    const animation = Animated.loop(
+      Animated.timing(spin, {
+        toValue: 1,
+        duration: 3200,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    );
+
+    animation.start();
+
+    return () => {
+      animation.stop();
+    };
+  }, [message, reduceMotion, spin]);
+
+  const entranceStyle = reduceMotion
+    ? null
+    : {
+        opacity: entrance,
+        transform: [
+          {
+            translateY: entrance.interpolate({
+              inputRange: [0, 1],
+              outputRange: [-6, 0],
+            }),
+          },
+          {
+            scale: entrance.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0.97, 1],
+            }),
+          },
+        ],
+      };
+  const spinStyle = reduceMotion
+    ? null
+    : {
+        transform: [
+          {
+            rotate: spin.interpolate({
+              inputRange: [0, 1],
+              outputRange: ['0deg', '360deg'],
+            }),
+          },
+        ],
+      };
+
+  return (
+    <Animated.View
+      accessibilityLiveRegion="polite"
+      accessibilityRole="alert"
+      style={[styles.successNoticeShell, entranceStyle]}
+    >
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.successNoticeGlow, spinStyle]}
+      >
+        <View
+          style={[styles.successNoticeGlowPatch, styles.successNoticeGlowMint]}
+        />
+        <View
+          style={[styles.successNoticeGlowPatch, styles.successNoticeGlowBlue]}
+        />
+        <View
+          style={[styles.successNoticeGlowPatch, styles.successNoticeGlowRose]}
+        />
+        <View
+          style={[
+            styles.successNoticeGlowPatch,
+            styles.successNoticeGlowPurple,
+          ]}
+        />
+      </Animated.View>
+      <View style={styles.successNoticeInner}>
+        <Text style={styles.successNoticeTitle}>Daily check-in saved</Text>
+        <Text style={styles.successNoticeText}>{message}</Text>
+      </View>
+    </Animated.View>
   );
 }
 
@@ -2400,6 +2551,67 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     marginBottom: 12,
     padding: 12,
+  },
+  successNoticeShell: {
+    backgroundColor: palette.purpleFaint,
+    borderRadius: 22,
+    marginBottom: 12,
+    overflow: 'hidden',
+    padding: 3,
+    position: 'relative',
+    ...cardShadow,
+  },
+  successNoticeGlow: {
+    bottom: -160,
+    left: -90,
+    position: 'absolute',
+    right: -90,
+    top: -160,
+  },
+  successNoticeGlowPatch: {
+    borderRadius: 999,
+    height: '62%',
+    position: 'absolute',
+    width: '62%',
+  },
+  successNoticeGlowMint: {
+    backgroundColor: palette.green,
+    left: 0,
+    top: 0,
+  },
+  successNoticeGlowBlue: {
+    backgroundColor: palette.blue,
+    right: 0,
+    top: 0,
+  },
+  successNoticeGlowRose: {
+    backgroundColor: palette.rose,
+    bottom: 0,
+    right: 0,
+  },
+  successNoticeGlowPurple: {
+    backgroundColor: palette.purple,
+    bottom: 0,
+    left: 0,
+  },
+  successNoticeInner: {
+    backgroundColor: palette.surface,
+    borderRadius: 19,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+  },
+  successNoticeTitle: {
+    color: palette.purple,
+    fontSize: 13,
+    fontWeight: '900',
+    marginBottom: 4,
+    textTransform: 'uppercase',
+  },
+  successNoticeText: {
+    color: palette.ink,
+    fontSize: 15,
+    fontWeight: '800',
+    lineHeight: 21,
   },
   errorText: {
     color: palette.coral,
