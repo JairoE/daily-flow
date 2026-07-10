@@ -38,12 +38,9 @@ npm test
 
 ### History
 
-- Review the last 30 calendar days.
-- See a scan-first 30-day overview strip with fixed-size day tiles.
-- Day tiles show Yes, No, Missed, or Pending status.
-- Yes tiles can show the logged Bristol type.
-- Symptom and laxative days are marked directly in the strip.
-- Runs of 2 or more days without a bowel movement are labeled as gaps.
+- Review the current month in a calendar card.
+- See logged days called out with circular calendar markers.
+- Calendar dates can be selected to add or update today or earlier days.
 - Recent history rows include the exact date, status, Bristol type, symptom names, laxative marker, and note preview when present.
 
 ### Trends

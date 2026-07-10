@@ -105,7 +105,25 @@ describe('daily log feedback', () => {
     );
   });
 
-  it('counts no logs toward streaks and recycles rescue copy', () => {
+  it('treats no bowel movement logs as streak breaks', () => {
+    const message = getDailyLogSuccessMessage(
+      [
+        entry('2026-07-10'),
+        entry('2026-07-09'),
+        entry('2026-07-08', { hadBowelMovement: false }),
+        entry('2026-07-07'),
+        entry('2026-07-06'),
+        entry('2026-07-05', { hadBowelMovement: false }),
+      ],
+      { today: '2026-07-10' },
+    );
+
+    expect(message).toBe(
+      "2 days in a row! You're really flushing out a great new habit.",
+    );
+  });
+
+  it('does not use rescue copy when the late log is not a bowel movement streak', () => {
     const message = getDailyLogSuccessMessage(
       [
         entry('2026-07-10', { hadBowelMovement: false }),
@@ -122,7 +140,7 @@ describe('daily log feedback', () => {
     );
 
     expect(message).toBe(
-      'Crisis averted. Your 6-day streak lives to see another day!',
+      'Nicely done. See you tomorrow!',
     );
   });
 });

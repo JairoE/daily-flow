@@ -87,11 +87,15 @@ export function isDailyLogSuccessMessage(message: string): boolean {
 }
 
 function getDailyLogStreakCount(entries: DailyEntry[], today: string): number {
-  const loggedDates = new Set(entries.map((entry) => entry.localDate));
+  const bowelMovementDates = new Set(
+    entries
+      .filter((entry) => entry.hadBowelMovement)
+      .map((entry) => entry.localDate),
+  );
   let cursor = today;
   let count = 0;
 
-  while (loggedDates.has(cursor)) {
+  while (bowelMovementDates.has(cursor)) {
     count += 1;
     cursor = addDays(cursor, -1);
   }

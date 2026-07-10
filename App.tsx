@@ -41,7 +41,7 @@ import {
 } from './src/lib/dates';
 import {
   buildHistoryDays,
-  filterHistoryDaysForProfile,
+  buildMonthHistoryDays,
   summarizeTrends,
 } from './src/lib/trends';
 import {
@@ -53,6 +53,7 @@ import type {
   DailyEntryInput,
   DailySymptoms,
   HistoryDay,
+  HistoryMonthDay,
   Profile,
   StoolType,
   TabKey,
@@ -65,6 +66,8 @@ const tabs: { key: TabKey; label: string }[] = [
   { key: 'trends', label: 'Trends' },
   { key: 'settings', label: 'Settings' },
 ];
+
+const entryLoadLimit = 90;
 
 const emptySymptoms: DailySymptoms = {
   straining: false,
@@ -113,6 +116,14 @@ export default function App() {
       }),
     [entries, today, includeTodayAsMissed],
   );
+  const monthHistoryDays = useMemo(
+    () =>
+      buildMonthHistoryDays(entries, {
+        today,
+        includeTodayAsMissed,
+      }),
+    [entries, today, includeTodayAsMissed],
+  );
   const trends = useMemo(
     () =>
       summarizeTrends(entries, {
@@ -129,7 +140,7 @@ export default function App() {
       await initializeStorage();
       await configureNotificationBehavior();
       const storedProfile = await getProfile();
-      const storedEntries = await getEntries(30);
+      const storedEntries = await getEntries(entryLoadLimit);
 
       if (storedProfile?.remindersEnabled) {
         await rescheduleProfileNotifications(storedProfile);
@@ -153,7 +164,7 @@ export default function App() {
   }, []);
 
   async function refreshEntries() {
-    const nextEntries = await getEntries(30);
+    const nextEntries = await getEntries(entryLoadLimit);
     setEntries(nextEntries);
     return nextEntries;
   }
@@ -330,8 +341,7 @@ export default function App() {
 
           {activeTab === 'history' ? (
             <HistoryScreen
-              historyDays={historyDays}
-              profile={profile}
+              monthDays={monthHistoryDays}
               onLogDate={handleLogForDate}
             />
           ) : null}
@@ -867,51 +877,31 @@ function TodayScreen({
 }
 
 function HistoryScreen({
-  historyDays,
-  profile,
+  monthDays,
   onLogDate,
 }: {
-  historyDays: HistoryDay[];
-  profile: Profile;
+  monthDays: HistoryMonthDay[];
   onLogDate: (localDate: string, input: DailyEntryInput) => Promise<void>;
 }) {
-  const chronologicalDays = [...historyDays].reverse();
-  const visibleHistoryDays = filterHistoryDaysForProfile(
-    historyDays,
-    profile.createdAt,
-  );
-  const visibleChronologicalDays = [...visibleHistoryDays].reverse();
-  const gapLabels = buildHistoryGapLabels(visibleChronologicalDays);
-  const profileStart = profileCreatedDateKey(profile.createdAt);
+  const today = getLocalDateKey();
+  const defaultEditDate = addDays(today, -1);
+  const [selectedDate, setSelectedDate] = useState(defaultEditDate);
+  const currentMonthDays = monthDays.filter((day) => day.isCurrentMonth);
+  const visibleHistoryDays = currentMonthDays
+    .filter((day) => day.localDate <= today)
+    .reverse();
 
   return (
     <View>
-      <View style={styles.panel}>
-        <Text style={styles.panelTitle}>30-day overview</Text>
-        <View style={styles.historyStrip}>
-          {chronologicalDays.map((day) => (
-            <HistoryTile
-              key={day.localDate}
-              day={day}
-              isPreProfile={day.localDate < profileStart && !day.entry}
-            />
-          ))}
-        </View>
-        {gapLabels.length ? (
-          <View style={styles.gapList}>
-            {gapLabels.map((gap) => (
-              <Text key={`${gap.startDate}-${gap.endDate}`} style={styles.gapText}>
-                {gap.length} day gap: {gap.startLabel} to {gap.endLabel}
-              </Text>
-            ))}
-          </View>
-        ) : (
-          <Text style={styles.chartEmptyText}>No 2+ day gaps in this window.</Text>
-        )}
-      </View>
+      <MonthCalendarCard
+        monthDays={monthDays}
+        selectedDate={selectedDate}
+        onSelectDate={setSelectedDate}
+      />
 
       <BackfillEntryPanel
-        profileCreatedAt={profile.createdAt}
+        localDate={selectedDate}
+        onDateChange={setSelectedDate}
         onSave={onLogDate}
       />
 
@@ -936,22 +926,18 @@ function HistoryScreen({
 }
 
 function BackfillEntryPanel({
-  profileCreatedAt,
+  localDate,
+  onDateChange,
   onSave,
 }: {
-  profileCreatedAt: string;
+  localDate: string;
+  onDateChange: (localDate: string) => void;
   onSave: (localDate: string, input: DailyEntryInput) => Promise<void>;
 }) {
-  const profileStart = profileCreatedDateKey(profileCreatedAt);
-  const [localDate, setLocalDate] = useState(addDays(profileStart, -1));
   const [hadBowelMovement, setHadBowelMovement] = useState<boolean | null>(null);
   const [stoolType, setStoolType] = useState<StoolType | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-
-  useEffect(() => {
-    setLocalDate(addDays(profileStart, -1));
-  }, [profileStart]);
 
   function handleChoice(value: boolean) {
     setHadBowelMovement(value);
@@ -970,8 +956,8 @@ function BackfillEntryPanel({
       return;
     }
 
-    if (normalizedDate >= profileStart) {
-      setError(`Choose a date before ${profileStart}.`);
+    if (normalizedDate > getLocalDateKey()) {
+      setError('Choose today or an earlier date.');
       return;
     }
 
@@ -993,7 +979,7 @@ function BackfillEntryPanel({
         hadBowelMovement,
         stoolType: hadBowelMovement ? stoolType : null,
       });
-      setLocalDate(addDays(normalizedDate, -1));
+      onDateChange(addDays(normalizedDate, -1));
       setHadBowelMovement(null);
       setStoolType(null);
     } finally {
@@ -1004,11 +990,11 @@ function BackfillEntryPanel({
   return (
     <View style={styles.panel}>
       <View style={styles.chartCardHeader}>
-        <Text style={styles.panelTitle}>Fill an earlier day</Text>
+        <Text style={styles.panelTitle}>Edit any day</Text>
         <Text style={styles.rangeText}>Optional</Text>
       </View>
       <Text style={styles.bodyText}>
-        Add remembered check-ins from before your profile start date.
+        Add or update remembered check-ins for today or any earlier date.
       </Text>
       <View style={styles.backfillForm}>
         <LabeledInput
@@ -1017,7 +1003,7 @@ function BackfillEntryPanel({
           placeholder="YYYY-MM-DD"
           keyboardType="numbers-and-punctuation"
           onChangeText={(value) => {
-            setLocalDate(value);
+            onDateChange(value);
             setError('');
           }}
         />
@@ -1117,11 +1103,123 @@ function BackfillEntryPanel({
       </View>
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
       <PrimaryButton
-        label={saving ? 'Saving...' : 'Save earlier day'}
+        label={saving ? 'Saving...' : 'Save selected day'}
         disabled={saving}
         onPress={handleSave}
       />
     </View>
+  );
+}
+
+function MonthCalendarCard({
+  monthDays,
+  selectedDate,
+  onSelectDate,
+}: {
+  monthDays: HistoryMonthDay[];
+  selectedDate: string;
+  onSelectDate: (localDate: string) => void;
+}) {
+  const currentMonthDay =
+    monthDays.find((day) => day.isCurrentMonth) ?? monthDays[0];
+  const monthTitle = currentMonthDay
+    ? parseLocalDateKey(currentMonthDay.localDate).toLocaleDateString(undefined, {
+        month: 'long',
+        year: 'numeric',
+      })
+    : 'Current month';
+  const weekdayLabels = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+
+  return (
+    <View style={styles.calendarPanel}>
+      <View style={styles.calendarHeader}>
+        <Text style={styles.calendarTitle}>{monthTitle}</Text>
+        <View
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={styles.calendarNavGlyphs}
+        >
+          <Text style={styles.calendarNavGlyph}>‹</Text>
+          <Text style={[styles.calendarNavGlyph, styles.calendarNavGlyphMuted]}>
+            ›
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.calendarWeekdayRow}>
+        {weekdayLabels.map((label) => (
+          <Text key={label} style={styles.calendarWeekday}>
+            {label}
+          </Text>
+        ))}
+      </View>
+
+      <View style={styles.calendarGrid}>
+        {monthDays.map((day) => (
+          <CalendarDayButton
+            key={day.localDate}
+            day={day}
+            selected={day.localDate === selectedDate}
+            onPress={() => onSelectDate(day.localDate)}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function CalendarDayButton({
+  day,
+  selected,
+  onPress,
+}: {
+  day: HistoryMonthDay;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  const answered = day.status === 'yes' || day.status === 'no';
+
+  return (
+    <Pressable
+      accessibilityLabel={`${day.label}, ${statusText(day.status)}${
+        day.isCurrentMonth ? '' : ', outside current month'
+      }`}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.calendarDayCell,
+        pressed && styles.pressedControl,
+      ]}
+    >
+      <View
+        style={[
+          styles.calendarDayBubble,
+          !day.isCurrentMonth && styles.calendarDayBubbleOutside,
+          answered && styles.calendarDayBubbleLogged,
+          day.status === 'no' && styles.calendarDayBubbleNo,
+          selected && styles.calendarDayBubbleSelected,
+        ]}
+      >
+        {answered ? (
+          <View
+            style={[
+              styles.calendarLoggedAccent,
+              day.status === 'no' && styles.calendarLoggedAccentNo,
+            ]}
+          />
+        ) : null}
+        <Text
+          style={[
+            styles.calendarDayText,
+            !day.isCurrentMonth && styles.calendarDayTextOutside,
+            selected && styles.calendarDayTextSelected,
+          ]}
+        >
+          {Number(day.localDate.slice(-2))}
+        </Text>
+      </View>
+    </Pressable>
   );
 }
 
@@ -1230,55 +1328,6 @@ function TrendsScreen({
       <ChartPanel title="Data completeness" range="Last 30 Days">
         <DataCompletenessChart trends={trends} />
       </ChartPanel>
-    </View>
-  );
-}
-
-function HistoryTile({
-  day,
-  isPreProfile = false,
-}: {
-  day: HistoryDay;
-  isPreProfile?: boolean;
-}) {
-  const selectedSymptomCount = day.entry ? symptomCount(day.entry.symptoms) : 0;
-
-  return (
-    <View
-      accessible
-      accessibilityLabel={`${day.label}, ${
-        isPreProfile ? 'Before profile start' : statusText(day.status)
-      }${day.entry?.stoolType ? `, Bristol ${day.entry.stoolType}` : ''}`}
-      style={[
-        styles.historyTile,
-        isPreProfile ? styles.preProfileTile : historyTileStyle(day.status),
-      ]}
-    >
-      <Text
-        style={[
-          styles.historyTileDate,
-          isPreProfile && styles.preProfileTileText,
-        ]}
-      >
-        {Number(day.localDate.slice(-2))}
-      </Text>
-      <Text
-        style={[
-          styles.historyTileStatus,
-          isPreProfile && styles.preProfileTileText,
-        ]}
-      >
-        {isPreProfile ? '-' : statusAbbreviation(day.status)}
-      </Text>
-      {day.entry?.stoolType ? (
-        <Text style={styles.historyTileMeta}>B{day.entry.stoolType}</Text>
-      ) : null}
-      <View style={styles.tileMarkerRow}>
-        {selectedSymptomCount > 0 ? (
-          <Text style={styles.tileMarker}>S</Text>
-        ) : null}
-        {day.entry?.laxativeUsed ? <Text style={styles.tileMarker}>L</Text> : null}
-      </View>
     </View>
   );
 }
@@ -1889,60 +1938,6 @@ function SummaryMetric({
   );
 }
 
-function buildHistoryGapLabels(chronologicalDays: HistoryDay[]) {
-  const gaps: {
-    startDate: string;
-    endDate: string;
-    startLabel: string;
-    endLabel: string;
-    length: number;
-  }[] = [];
-  let activeGap: HistoryDay[] = [];
-  let seenYes = false;
-
-  for (const day of chronologicalDays) {
-    if (day.status === 'pending') {
-      continue;
-    }
-
-    if (day.status === 'yes') {
-      if (seenYes && activeGap.length >= 2) {
-        const first = activeGap[0];
-        const last = activeGap[activeGap.length - 1];
-        gaps.push({
-          startDate: first.localDate,
-          endDate: last.localDate,
-          startLabel: first.label,
-          endLabel: last.label,
-          length: activeGap.length,
-        });
-      }
-
-      seenYes = true;
-      activeGap = [];
-      continue;
-    }
-
-    if (seenYes && (day.status === 'no' || day.status === 'missed')) {
-      activeGap.push(day);
-    }
-  }
-
-  if (seenYes && activeGap.length >= 2) {
-    const first = activeGap[0];
-    const last = activeGap[activeGap.length - 1];
-    gaps.push({
-      startDate: first.localDate,
-      endDate: last.localDate,
-      startLabel: first.label,
-      endLabel: last.label,
-      length: activeGap.length,
-    });
-  }
-
-  return gaps;
-}
-
 function symptomCount(symptoms: DailySymptoms): number {
   return symptomOptions.filter((option) => symptoms[option.key]).length;
 }
@@ -2001,22 +1996,6 @@ function pluralize(value: number, singular: string): string {
   return value === 1 ? singular : `${singular}s`;
 }
 
-function statusAbbreviation(status: HistoryDay['status']): string {
-  if (status === 'yes') {
-    return 'Y';
-  }
-
-  if (status === 'no') {
-    return 'N';
-  }
-
-  if (status === 'missed') {
-    return 'M';
-  }
-
-  return 'P';
-}
-
 function statusText(status: HistoryDay['status']): string {
   if (status === 'yes') {
     return 'Yes';
@@ -2065,15 +2044,6 @@ function statusPillTextStyle(tone: 'green' | 'coral' | 'amber' | 'blue') {
     amber: styles.amberPillText,
     blue: styles.bluePillText,
   }[tone];
-}
-
-function historyTileStyle(status: HistoryDay['status']) {
-  return {
-    yes: styles.greenTile,
-    no: styles.coralTile,
-    missed: styles.amberTile,
-    pending: styles.blueTile,
-  }[status];
 }
 
 type MetricTone =
@@ -2128,10 +2098,6 @@ function weekdayInitial(localDate: string): string {
   return parseLocalDateKey(localDate)
     .toLocaleDateString(undefined, { weekday: 'short' })
     .slice(0, 1);
-}
-
-function profileCreatedDateKey(profileCreatedAt: string): string {
-  return getLocalDateKey(new Date(profileCreatedAt));
 }
 
 function normalizeBackfillLocalDate(value: string): string | null {
@@ -2504,6 +2470,110 @@ const styles = StyleSheet.create({
   backfillForm: {
     marginTop: 14,
   },
+  calendarPanel: {
+    backgroundColor: palette.surface,
+    borderRadius: 28,
+    marginBottom: 24,
+    paddingHorizontal: 18,
+    paddingBottom: 22,
+    paddingTop: 18,
+    ...cardShadow,
+  },
+  calendarHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 18,
+  },
+  calendarTitle: {
+    color: palette.ink,
+    fontSize: 24,
+    fontWeight: '900',
+  },
+  calendarNavGlyphs: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 16,
+  },
+  calendarNavGlyph: {
+    color: palette.purple,
+    fontSize: 42,
+    fontWeight: '700',
+    lineHeight: 44,
+  },
+  calendarNavGlyphMuted: {
+    color: palette.purpleSoft,
+  },
+  calendarWeekdayRow: {
+    flexDirection: 'row',
+    marginBottom: 12,
+  },
+  calendarWeekday: {
+    color: palette.softText,
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    rowGap: 8,
+  },
+  calendarDayCell: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+    width: '14.2857%',
+  },
+  calendarDayBubble: {
+    alignItems: 'center',
+    borderColor: 'transparent',
+    borderRadius: 999,
+    borderWidth: 4,
+    height: 42,
+    justifyContent: 'center',
+    position: 'relative',
+    width: 42,
+  },
+  calendarDayBubbleOutside: {
+    opacity: 0.42,
+  },
+  calendarDayBubbleLogged: {
+    borderColor: palette.purpleSoft,
+  },
+  calendarDayBubbleNo: {
+    borderColor: '#FFB8BE',
+  },
+  calendarDayBubbleSelected: {
+    backgroundColor: palette.purpleFaint,
+  },
+  calendarLoggedAccent: {
+    backgroundColor: palette.purple,
+    borderRadius: 999,
+    height: 18,
+    position: 'absolute',
+    right: 1,
+    top: -2,
+    transform: [{ rotate: '-28deg' }],
+    width: 7,
+  },
+  calendarLoggedAccentNo: {
+    backgroundColor: palette.coral,
+  },
+  calendarDayText: {
+    color: palette.ink,
+    fontSize: 14,
+    fontWeight: '800',
+    fontVariant: ['tabular-nums'],
+  },
+  calendarDayTextOutside: {
+    color: palette.softText,
+  },
+  calendarDayTextSelected: {
+    color: palette.purple,
+    fontWeight: '900',
+  },
   toggleRow: {
     alignItems: 'center',
     borderTopColor: palette.border,
@@ -2669,77 +2739,6 @@ const styles = StyleSheet.create({
   },
   bluePillText: {
     color: '#1264B2',
-  },
-  historyStrip: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 9,
-  },
-  historyTile: {
-    alignItems: 'center',
-    backgroundColor: palette.surface,
-    borderRadius: 22,
-    borderWidth: 4,
-    height: 44,
-    justifyContent: 'center',
-    width: 44,
-  },
-  greenTile: {
-    borderColor: palette.purple,
-  },
-  coralTile: {
-    borderColor: palette.coral,
-  },
-  amberTile: {
-    borderColor: palette.amber,
-  },
-  blueTile: {
-    borderColor: palette.purpleSoft,
-  },
-  preProfileTile: {
-    backgroundColor: '#F7F7FA',
-    borderColor: '#D8D5E0',
-  },
-  preProfileTileText: {
-    color: palette.softText,
-  },
-  historyTileDate: {
-    color: palette.ink,
-    fontSize: 13,
-    fontWeight: '900',
-    fontVariant: ['tabular-nums'],
-  },
-  historyTileStatus: {
-    color: palette.softText,
-    fontSize: 9,
-    fontWeight: '900',
-    marginTop: -1,
-  },
-  historyTileMeta: {
-    color: palette.purple,
-    fontSize: 8,
-    fontWeight: '900',
-    marginTop: -1,
-  },
-  tileMarkerRow: {
-    flexDirection: 'row',
-    gap: 2,
-    minHeight: 8,
-  },
-  tileMarker: {
-    color: palette.blue,
-    fontSize: 7,
-    fontWeight: '900',
-  },
-  gapList: {
-    gap: 6,
-    marginTop: 14,
-  },
-  gapText: {
-    color: '#9A5300',
-    fontSize: 13,
-    fontWeight: '800',
-    lineHeight: 18,
   },
   historyRow: {
     alignItems: 'center',

@@ -1,7 +1,7 @@
 import type { DailyEntry, DailyEntryInput } from '../types';
 import {
   buildHistoryDays,
-  filterHistoryDaysForProfile,
+  buildMonthHistoryDays,
   summarizeTrends,
 } from '../lib/trends';
 
@@ -194,26 +194,38 @@ describe('trend helpers', () => {
     ]);
   });
 
-  it('filters visible history to profile start while preserving filled earlier days', () => {
-    const historyDays = buildHistoryDays(
-      [richEntry('2026-07-02', { hadBowelMovement: true, stoolType: 4 })],
+  it('builds a six-week current-month calendar without profile-start filtering', () => {
+    const monthDays = buildMonthHistoryDays(
+      [
+        richEntry('2026-07-02', { hadBowelMovement: true, stoolType: 4 }),
+        richEntry('2026-06-29', { hadBowelMovement: false }),
+        richEntry('2026-08-01', { hadBowelMovement: true, stoolType: 3 }),
+      ],
       {
-        days: 7,
         today: '2026-07-07',
         includeTodayAsMissed: true,
       },
     );
 
-    const visibleDays = filterHistoryDaysForProfile(
-      historyDays,
-      '2026-07-05T14:30:00.000Z',
-    );
+    expect(monthDays).toHaveLength(42);
+    expect(monthDays[0].localDate).toBe('2026-06-28');
+    expect(monthDays[0].isCurrentMonth).toBe(false);
+    expect(monthDays[3].localDate).toBe('2026-07-01');
+    expect(monthDays[3].isCurrentMonth).toBe(true);
+    expect(monthDays[monthDays.length - 1].localDate).toBe('2026-08-08');
+    expect(monthDays[monthDays.length - 1].isCurrentMonth).toBe(false);
 
-    expect(visibleDays.map((day) => day.localDate)).toEqual([
-      '2026-07-07',
-      '2026-07-06',
-      '2026-07-05',
-      '2026-07-02',
-    ]);
+    expect(monthDays.find((day) => day.localDate === '2026-06-29')?.status).toBe(
+      'no',
+    );
+    expect(monthDays.find((day) => day.localDate === '2026-07-02')?.status).toBe(
+      'yes',
+    );
+    expect(monthDays.find((day) => day.localDate === '2026-07-08')?.status).toBe(
+      'pending',
+    );
+    expect(monthDays.find((day) => day.localDate === '2026-08-01')?.status).toBe(
+      'yes',
+    );
   });
 });

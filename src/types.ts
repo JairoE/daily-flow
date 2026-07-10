@@ -66,6 +66,10 @@ export type HistoryDay = {
   entry: DailyEntry | null;
 };
 
+export type HistoryMonthDay = HistoryDay & {
+  isCurrentMonth: boolean;
+};
+
 export type WeeklyFrequencyPoint = {
   label: string;
   startDate: string;

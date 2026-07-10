@@ -2,6 +2,7 @@ import type {
   BristolDistributionItem,
   DailyEntry,
   HistoryDay,
+  HistoryMonthDay,
   IntervalPoint,
   RollingFrequencyPoint,
   StoolType,
@@ -10,6 +11,7 @@ import type {
   WeeklyFrequencyPoint,
 } from '../types';
 import {
+  addDays,
   daysBetween,
   formatFriendlyDate,
   getLocalDateKey,
@@ -36,10 +38,6 @@ function isAnswered(day: HistoryDay): boolean {
 
 function isNonPending(day: HistoryDay): boolean {
   return day.status !== 'pending';
-}
-
-function profileStartDateKey(profileCreatedAt: string): string {
-  return getLocalDateKey(new Date(profileCreatedAt));
 }
 
 function isNoBowelMovementDay(day: HistoryDay): boolean {
@@ -221,15 +219,49 @@ export function buildHistoryDays(
     });
 }
 
-export function filterHistoryDaysForProfile(
-  historyDays: HistoryDay[],
-  profileCreatedAt: string,
-): HistoryDay[] {
-  const profileStart = profileStartDateKey(profileCreatedAt);
-
-  return historyDays.filter(
-    (day) => day.localDate >= profileStart || day.entry !== null,
+export function buildMonthHistoryDays(
+  entries: DailyEntry[],
+  options: {
+    today?: string;
+    includeTodayAsMissed?: boolean;
+  } = {},
+): HistoryMonthDay[] {
+  const today = options.today ?? getLocalDateKey();
+  const currentDate = parseLocalDateKey(today);
+  const monthStart = getLocalDateKey(
+    new Date(currentDate.getFullYear(), currentDate.getMonth(), 1),
   );
+  const gridStart = addDays(monthStart, -parseLocalDateKey(monthStart).getDay());
+  const byDate = entryMap(entries);
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const localDate = addDays(gridStart, index);
+    const entry = byDate.get(localDate) ?? null;
+    const isToday = localDate === today;
+    const isCurrentMonth =
+      parseLocalDateKey(localDate).getMonth() === currentDate.getMonth();
+
+    if (entry) {
+      return {
+        localDate,
+        label: formatFriendlyDate(localDate, today),
+        status: entry.hadBowelMovement ? 'yes' : 'no',
+        entry,
+        isCurrentMonth,
+      };
+    }
+
+    return {
+      localDate,
+      label: formatFriendlyDate(localDate, today),
+      status:
+        localDate > today || (isToday && !options.includeTodayAsMissed)
+          ? 'pending'
+          : 'missed',
+      entry: null,
+      isCurrentMonth,
+    };
+  });
 }
 
 export function summarizeTrends(
