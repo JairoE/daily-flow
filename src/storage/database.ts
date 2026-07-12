@@ -361,6 +361,16 @@ export async function getEntries(limit = 30): Promise<DailyEntry[]> {
   return rows.map(mapEntry);
 }
 
+export async function getAllEntries(): Promise<DailyEntry[]> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<DailyEntryRow>(
+    `SELECT * FROM daily_entries
+     ORDER BY local_date ASC`,
+  );
+
+  return rows.map(mapEntry);
+}
+
 export async function getEntryByDate(
   localDate: string,
 ): Promise<DailyEntry | null> {

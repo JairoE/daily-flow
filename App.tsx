@@ -23,9 +23,11 @@ import {
   rescheduleProfileNotifications,
   syncNotificationsAfterEntry,
 } from './src/services/notifications';
+import { exportEntriesCsv } from './src/services/exportEntries';
 import {
   createProfile,
   deleteAllData,
+  getAllEntries,
   getEntries,
   getProfile,
   initializeStorage,
@@ -288,6 +290,22 @@ export default function App() {
     );
   }
 
+  async function handleExportData() {
+    try {
+      const allEntries = await getAllEntries();
+      const result = await exportEntriesCsv(allEntries, today);
+      setNotice(
+        result.delivery === 'web-download'
+          ? `CSV download prepared with ${result.rowCount} entries.`
+          : `CSV export prepared with ${result.rowCount} entries.`,
+      );
+    } catch (error: unknown) {
+      setNotice(
+        error instanceof Error ? error.message : 'Unable to export CSV data.',
+      );
+    }
+  }
+
   if (!ready) {
     return <LoadingScreen />;
   }
@@ -381,6 +399,7 @@ export default function App() {
             <SettingsScreen
               profile={profile}
               onSave={handleSaveSettings}
+              onExportData={handleExportData}
               onDeleteData={handleDeleteData}
             />
           ) : null}
@@ -1755,14 +1774,17 @@ function EmptyChart() {
 function SettingsScreen({
   profile,
   onSave,
+  onExportData,
   onDeleteData,
 }: {
   profile: Profile;
   onSave: (profile: Profile) => Promise<void>;
+  onExportData: () => Promise<void>;
   onDeleteData: () => void;
 }) {
   const [draft, setDraft] = useState(profile);
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     setDraft(profile);
@@ -1775,6 +1797,16 @@ function SettingsScreen({
       await onSave(draft);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleExport() {
+    setExporting(true);
+
+    try {
+      await onExportData();
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -1819,6 +1851,20 @@ function SettingsScreen({
           disabled={saving}
           onPress={handleSave}
         />
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.panelTitle}>Export data</Text>
+        <Text style={styles.bodyText}>
+          Save a CSV of every local check-in for a future hosted import.
+        </Text>
+        <View style={styles.panelAction}>
+          <PrimaryButton
+            label={exporting ? 'Preparing CSV...' : 'Export CSV'}
+            disabled={exporting}
+            onPress={handleExport}
+          />
+        </View>
       </View>
 
       <View style={styles.privacyBox}>
@@ -2454,6 +2500,9 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 18,
     fontWeight: '900',
+  },
+  panelAction: {
+    marginTop: 14,
   },
   bodyText: {
     color: palette.muted,
