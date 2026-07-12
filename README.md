@@ -70,6 +70,7 @@ npm test
 - Turn gentle reminders on or off.
 - Use private notification text that avoids bowel-movement wording.
 - Store a privacy lock preference.
+- Export every local check-in as CSV for future backend migration.
 - Delete local data from the app.
 
 ## Data And Privacy
@@ -77,6 +78,8 @@ npm test
 - Data stays local by default.
 - Native builds use SQLite through `expo-sqlite`.
 - Web builds use `localStorage`.
+- CSV export writes stable migration columns for all local check-ins and opens
+  the device share sheet on iOS and Android.
 - Existing Yes/No-only entries are still readable and count toward frequency and check-in metrics.
 - Older entries without detail fields are excluded from Bristol, symptom, laxative, and note-specific trend denominators.
 - The app does not include accounts, cloud sync, ads, analytics, diagnosis, or treatment recommendations.

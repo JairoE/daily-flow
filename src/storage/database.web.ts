@@ -179,6 +179,10 @@ export async function getEntries(limit = 30): Promise<DailyEntry[]> {
     .slice(0, limit);
 }
 
+export async function getAllEntries(): Promise<DailyEntry[]> {
+  return readState().entries.sort((a, b) => a.localDate.localeCompare(b.localDate));
+}
+
 export async function getEntryByDate(
   localDate: string,
 ): Promise<DailyEntry | null> {
