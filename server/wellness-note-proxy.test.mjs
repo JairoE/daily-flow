@@ -59,6 +59,24 @@ test('rejects disallowed origins', () => {
   assert.equal(validate({ origin: 'https://example.com' }).status, 403);
 });
 
+test('accepts authenticated originless native requests', () => {
+  assert.equal(validate({ origin: '' }).ok, true);
+
+  assert.equal(
+    validateRequestPolicy({
+      method: 'POST',
+      pathname: '/wellness-question',
+      origin: '',
+      authorization: `Bearer ${accessToken}`,
+      body: questionPayload,
+      bodyBytes: JSON.stringify(questionPayload).length,
+      allowedOrigins,
+      accessToken,
+    }).ok,
+    true,
+  );
+});
+
 test('rejects oversized bodies', () => {
   assert.equal(validate({ bodyBytes: MAX_BODY_BYTES + 1 }).status, 413);
 });

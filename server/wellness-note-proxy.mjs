@@ -75,6 +75,10 @@ export function isAllowedOrigin(origin, allowedOrigins) {
   return Boolean(origin && allowedOrigins.includes(origin));
 }
 
+function isAllowedRequestOrigin(origin, allowedOrigins) {
+  return !origin || isAllowedOrigin(origin, allowedOrigins);
+}
+
 function isPlainRecord(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -244,7 +248,7 @@ export function validateRequestPolicy({
     return { ok: false, status: 405, error: 'Method not allowed.' };
   }
 
-  if (!isAllowedOrigin(origin, allowedOrigins)) {
+  if (!isAllowedRequestOrigin(origin, allowedOrigins)) {
     return { ok: false, status: 403, error: 'Origin is not allowed.' };
   }
 
