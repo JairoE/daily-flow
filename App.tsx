@@ -56,8 +56,11 @@ import {
 } from './src/lib/dailyOpenNotice';
 import {
   buildLlmWellnessNotePayload,
+  getInitialWellnessNoteDisplayState,
   requestLlmWellnessNote,
+  resolveWellnessNoteDisplayState,
 } from './src/lib/llmWellnessNotes';
+import type { WellnessNoteDisplayState } from './src/lib/llmWellnessNotes';
 import { getFallbackWellnessNote } from './src/lib/wellnessNotes';
 import type {
   DailyEntry,
@@ -707,7 +710,10 @@ function TodayScreen({
   const [laxativeNote, setLaxativeNote] = useState(entry?.laxativeNote ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [llmWellnessNote, setLlmWellnessNote] = useState<string | null>(null);
+  const [wellnessNoteState, setWellnessNoteState] =
+    useState<WellnessNoteDisplayState>(() =>
+      getInitialWellnessNoteDisplayState(profile),
+    );
 
   useEffect(() => {
     setHadBowelMovement(entry?.hadBowelMovement ?? null);
@@ -720,12 +726,20 @@ function TodayScreen({
 
   useEffect(() => {
     let cancelled = false;
+    const initialState = getInitialWellnessNoteDisplayState(profile);
 
-    setLlmWellnessNote(null);
+    setWellnessNoteState(initialState);
+
+    if (initialState.status === 'fallback') {
+      return () => {
+        cancelled = true;
+      };
+    }
+
     requestLlmWellnessNote(profile, buildLlmWellnessNotePayload(trends)).then(
       (note) => {
         if (!cancelled) {
-          setLlmWellnessNote(note);
+          setWellnessNoteState(resolveWellnessNoteDisplayState(note));
         }
       },
     );
@@ -796,7 +810,12 @@ function TodayScreen({
     : includeTodayAsMissed
       ? 'Not checked in yet'
       : 'Ready when you are';
-  const wellnessNote = llmWellnessNote ?? getFallbackWellnessNote(localDate);
+  const wellnessNote =
+    wellnessNoteState.status === 'generated'
+      ? wellnessNoteState.note
+      : wellnessNoteState.status === 'fallback'
+        ? getFallbackWellnessNote(localDate)
+        : null;
 
   return (
     <View>
@@ -952,7 +971,20 @@ function TodayScreen({
 
       <View style={styles.wellnessPanel}>
         <Text style={styles.panelTitle}>Gentle wellness note</Text>
-        <Text style={styles.bodyText}>{wellnessNote}</Text>
+        <View style={styles.wellnessNoteContent}>
+          {wellnessNoteState.status === 'loading' ? (
+            <View
+              accessibilityLabel="Preparing gentle wellness note"
+              accessibilityRole="progressbar"
+              style={styles.wellnessNoteLoading}
+            >
+              <ActivityIndicator color={palette.green} size="small" />
+              <Text style={styles.bodyText}>Preparing your note...</Text>
+            </View>
+          ) : (
+            <Text style={styles.bodyText}>{wellnessNote}</Text>
+          )}
+        </View>
       </View>
     </View>
   );
@@ -2436,6 +2468,16 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     padding: 16,
     ...cardShadow,
+  },
+  wellnessNoteContent: {
+    justifyContent: 'center',
+    marginTop: 8,
+    minHeight: 44,
+  },
+  wellnessNoteLoading: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
   },
   kicker: {
     color: palette.purple,

@@ -14,6 +14,11 @@ export type LlmWellnessNotePayload = {
   detailDays: number;
 };
 
+export type WellnessNoteDisplayState =
+  | { status: 'fallback' }
+  | { status: 'loading' }
+  | { status: 'generated'; note: string };
+
 type WellnessNoteFetchResponse = {
   ok: boolean;
   json: () => Promise<unknown>;
@@ -53,6 +58,20 @@ export function hasConfiguredLlmWellnessNotes(profile: Profile): boolean {
     profile.llmWellnessNoteEndpoint.trim().length > 0 &&
     profile.llmWellnessNoteAccessToken.trim().length > 0
   );
+}
+
+export function getInitialWellnessNoteDisplayState(
+  profile: Profile,
+): WellnessNoteDisplayState {
+  return hasConfiguredLlmWellnessNotes(profile)
+    ? { status: 'loading' }
+    : { status: 'fallback' };
+}
+
+export function resolveWellnessNoteDisplayState(
+  note: string | null,
+): WellnessNoteDisplayState {
+  return note ? { status: 'generated', note } : { status: 'fallback' };
 }
 
 function readNoteResponse(value: unknown): string | null {

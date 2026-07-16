@@ -1,7 +1,9 @@
 import {
   buildLlmWellnessNotePayload,
+  getInitialWellnessNoteDisplayState,
   hasConfiguredLlmWellnessNotes,
   requestLlmWellnessNote,
+  resolveWellnessNoteDisplayState,
 } from '../lib/llmWellnessNotes';
 import type { Profile, TrendSummary } from '../types';
 
@@ -96,6 +98,44 @@ describe('LLM wellness note helpers', () => {
         llmWellnessNoteAccessToken: '',
       }),
     ).toBe(false);
+  });
+
+  it('loads only when an LLM wellness note request can be made', () => {
+    expect(getInitialWellnessNoteDisplayState(profile)).toEqual({
+      status: 'loading',
+    });
+    expect(
+      getInitialWellnessNoteDisplayState({
+        ...profile,
+        llmWellnessNotesEnabled: false,
+      }),
+    ).toEqual({ status: 'fallback' });
+    expect(
+      getInitialWellnessNoteDisplayState({
+        ...profile,
+        llmWellnessNoteEndpoint: '',
+      }),
+    ).toEqual({ status: 'fallback' });
+    expect(
+      getInitialWellnessNoteDisplayState({
+        ...profile,
+        llmWellnessNoteAccessToken: '',
+      }),
+    ).toEqual({ status: 'fallback' });
+  });
+
+  it('shows a viable generated note and otherwise falls back', () => {
+    expect(
+      resolveWellnessNoteDisplayState(
+        'Keep noticing patterns with gentle consistency.',
+      ),
+    ).toEqual({
+      status: 'generated',
+      note: 'Keep noticing patterns with gentle consistency.',
+    });
+    expect(resolveWellnessNoteDisplayState(null)).toEqual({
+      status: 'fallback',
+    });
   });
 
   it('returns a generated note on a successful response', async () => {
