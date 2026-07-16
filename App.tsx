@@ -1,4 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
+import { LinearGradient } from 'expo-linear-gradient';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
@@ -61,6 +62,15 @@ import {
   resolveWellnessNoteDisplayState,
 } from './src/lib/llmWellnessNotes';
 import type { WellnessNoteDisplayState } from './src/lib/llmWellnessNotes';
+import {
+  MAX_WELLNESS_QUESTION_CHARS,
+  requestLlmWellnessAnswer,
+} from './src/lib/llmWellnessQuestions';
+import {
+  flowBetterTab,
+  primaryTabs,
+  resolveAccessibleTab,
+} from './src/lib/navigation';
 import { getFallbackWellnessNote } from './src/lib/wellnessNotes';
 import type {
   DailyEntry,
@@ -73,13 +83,6 @@ import type {
   TabKey,
   TrendSummary,
 } from './src/types';
-
-const tabs: { key: TabKey; label: string }[] = [
-  { key: 'today', label: 'Today' },
-  { key: 'history', label: 'History' },
-  { key: 'trends', label: 'Trends' },
-  { key: 'settings', label: 'Settings' },
-];
 
 const entryLoadLimit = 90;
 
@@ -146,6 +149,15 @@ export default function App() {
       }),
     [entries, today, includeTodayAsMissed],
   );
+
+  useEffect(() => {
+    setActiveTab((current) =>
+      resolveAccessibleTab(
+        current,
+        Boolean(profile?.llmWellnessNotesEnabled),
+      ),
+    );
+  }, [profile?.llmWellnessNotesEnabled]);
 
   useEffect(() => {
     let cancelled = false;
@@ -330,7 +342,11 @@ export default function App() {
       <View style={styles.appShell}>
         <View style={styles.header}>
           <Text style={styles.appName}>
-            {activeTab === 'trends' ? 'Statistics' : 'Daily Flow'}
+            {activeTab === 'trends'
+              ? 'Statistics'
+              : activeTab === 'flow-better'
+                ? 'Flow Better'
+                : 'Daily Flow'}
           </Text>
           <Text style={styles.headerMeta}>
             {profile.displayName} · Local-only wellness tracker
@@ -338,29 +354,69 @@ export default function App() {
         </View>
 
         <View style={styles.tabs} accessibilityRole="tablist">
-          {tabs.map((tab) => (
-            <Pressable
-              key={tab.key}
-              accessibilityLabel={`Open ${tab.label} tab`}
-              accessibilityRole="tab"
-              accessibilityState={{ selected: activeTab === tab.key }}
-              onPress={() => setActiveTab(tab.key)}
-              style={({ pressed }) => [
-                styles.tabButton,
-                pressed && styles.pressedControl,
-                activeTab === tab.key && styles.activeTabButton,
-              ]}
-            >
-              <Text
-                style={[
-                  styles.tabText,
-                  activeTab === tab.key && styles.activeTabText,
+          <View style={styles.primaryTabRow}>
+            {primaryTabs.map((tab) => (
+              <Pressable
+                key={tab.key}
+                accessibilityLabel={`Open ${tab.label} tab`}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: activeTab === tab.key }}
+                onPress={() => setActiveTab(tab.key)}
+                style={({ pressed }) => [
+                  styles.tabButton,
+                  pressed && styles.pressedControl,
+                  activeTab === tab.key && styles.activeTabButton,
                 ]}
               >
-                {tab.label}
-              </Text>
-            </Pressable>
-          ))}
+                <Text
+                  style={[
+                    styles.tabText,
+                    activeTab === tab.key && styles.activeTabText,
+                  ]}
+                >
+                  {tab.label}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+
+          {profile.llmWellnessNotesEnabled ? (
+            <LinearGradient
+              colors={[
+                palette.rose,
+                palette.purple,
+                palette.blue,
+                palette.green,
+              ]}
+              end={{ x: 1, y: 0 }}
+              start={{ x: 0, y: 0 }}
+              style={styles.flowBetterTabOutline}
+            >
+              <Pressable
+                accessibilityLabel={`Open ${flowBetterTab.label} tab`}
+                accessibilityRole="tab"
+                accessibilityState={{
+                  selected: activeTab === flowBetterTab.key,
+                }}
+                onPress={() => setActiveTab(flowBetterTab.key)}
+                style={({ pressed }) => [
+                  styles.flowBetterTabButton,
+                  activeTab === flowBetterTab.key &&
+                    styles.activeFlowBetterTabButton,
+                  pressed && styles.pressedControl,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.flowBetterTabText,
+                    activeTab === flowBetterTab.key && styles.activeTabText,
+                  ]}
+                >
+                  {flowBetterTab.label}
+                </Text>
+              </Pressable>
+            </LinearGradient>
+          ) : null}
         </View>
 
         {notice ? (
@@ -388,10 +444,15 @@ export default function App() {
             <TodayScreen
               entry={todayEntry}
               includeTodayAsMissed={includeTodayAsMissed}
+              onLog={handleLog}
+            />
+          ) : null}
+
+          {activeTab === 'flow-better' ? (
+            <FlowBetterScreen
               localDate={today}
               profile={profile}
               trends={trends}
-              onLog={handleLog}
             />
           ) : null}
 
@@ -680,19 +741,13 @@ function OnboardingScreen({
   );
 }
 
-function TodayScreen({
+export function TodayScreen({
   entry,
   includeTodayAsMissed,
-  localDate,
-  profile,
-  trends,
   onLog,
 }: {
   entry: DailyEntry | null;
   includeTodayAsMissed: boolean;
-  localDate: string;
-  profile: Profile;
-  trends: TrendSummary;
   onLog: (input: DailyEntryInput) => Promise<void>;
 }) {
   const [hadBowelMovement, setHadBowelMovement] = useState<boolean | null>(
@@ -710,10 +765,6 @@ function TodayScreen({
   const [laxativeNote, setLaxativeNote] = useState(entry?.laxativeNote ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  const [wellnessNoteState, setWellnessNoteState] =
-    useState<WellnessNoteDisplayState>(() =>
-      getInitialWellnessNoteDisplayState(profile),
-    );
 
   useEffect(() => {
     setHadBowelMovement(entry?.hadBowelMovement ?? null);
@@ -723,37 +774,6 @@ function TodayScreen({
     setLaxativeNote(entry?.laxativeNote ?? '');
     setError('');
   }, [entry]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const initialState = getInitialWellnessNoteDisplayState(profile);
-
-    setWellnessNoteState(initialState);
-
-    if (initialState.status === 'fallback') {
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    requestLlmWellnessNote(profile, buildLlmWellnessNotePayload(trends)).then(
-      (note) => {
-        if (!cancelled) {
-          setWellnessNoteState(resolveWellnessNoteDisplayState(note));
-        }
-      },
-    );
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    localDate,
-    profile.llmWellnessNoteAccessToken,
-    profile.llmWellnessNoteEndpoint,
-    profile.llmWellnessNotesEnabled,
-    trends,
-  ]);
 
   function handleChoice(value: boolean) {
     setHadBowelMovement(value);
@@ -810,13 +830,6 @@ function TodayScreen({
     : includeTodayAsMissed
       ? 'Not checked in yet'
       : 'Ready when you are';
-  const wellnessNote =
-    wellnessNoteState.status === 'generated'
-      ? wellnessNoteState.note
-      : wellnessNoteState.status === 'fallback'
-        ? getFallbackWellnessNote(localDate)
-        : null;
-
   return (
     <View>
       <View style={styles.heroPanel}>
@@ -968,7 +981,104 @@ function TodayScreen({
           onPress={handleSave}
         />
       </View>
+    </View>
+  );
+}
 
+export function FlowBetterScreen({
+  localDate,
+  profile,
+  trends,
+}: {
+  localDate: string;
+  profile: Profile;
+  trends: TrendSummary;
+}) {
+  const [wellnessNoteState, setWellnessNoteState] =
+    useState<WellnessNoteDisplayState>(() =>
+      getInitialWellnessNoteDisplayState(profile),
+    );
+  const [question, setQuestion] = useState('');
+  const [answer, setAnswer] = useState('');
+  const [questionError, setQuestionError] = useState('');
+  const [asking, setAsking] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const initialState = getInitialWellnessNoteDisplayState(profile);
+
+    setWellnessNoteState(initialState);
+
+    if (initialState.status === 'fallback') {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    requestLlmWellnessNote(profile, buildLlmWellnessNotePayload(trends)).then(
+      (note) => {
+        if (!cancelled) {
+          setWellnessNoteState(resolveWellnessNoteDisplayState(note));
+        }
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    localDate,
+    profile.llmWellnessNoteAccessToken,
+    profile.llmWellnessNoteEndpoint,
+    profile.llmWellnessNotesEnabled,
+    trends,
+  ]);
+
+  async function handleAskQuestion() {
+    if (!question.trim()) {
+      setQuestionError('Enter a question first.');
+      return;
+    }
+
+    setAsking(true);
+    setAnswer('');
+    setQuestionError('');
+
+    try {
+      const result = await requestLlmWellnessAnswer(
+        profile,
+        question,
+        buildLlmWellnessNotePayload(trends),
+      );
+
+      if (result.ok) {
+        setAnswer(result.answer);
+        return;
+      }
+
+      if (result.reason === 'not-configured') {
+        setQuestionError(
+          'Add your Pro+ endpoint and access code in Settings.',
+        );
+      } else if (result.reason === 'invalid-question') {
+        setQuestionError('Keep your question between 1 and 500 characters.');
+      } else {
+        setQuestionError('Unable to answer right now. Please try again.');
+      }
+    } finally {
+      setAsking(false);
+    }
+  }
+
+  const wellnessNote =
+    wellnessNoteState.status === 'generated'
+      ? wellnessNoteState.note
+      : wellnessNoteState.status === 'fallback'
+        ? getFallbackWellnessNote(localDate)
+        : null;
+
+  return (
+    <View>
       <View style={styles.wellnessPanel}>
         <Text style={styles.panelTitle}>Gentle wellness note</Text>
         <View style={styles.wellnessNoteContent}>
@@ -985,6 +1095,51 @@ function TodayScreen({
             <Text style={styles.bodyText}>{wellnessNote}</Text>
           )}
         </View>
+      </View>
+
+      <View style={styles.panel}>
+        <Text style={styles.panelTitle}>Ask about your flow</Text>
+        <View style={styles.wellnessQuestionForm}>
+          <LabeledInput
+            label="Question"
+            value={question}
+            placeholder="What would you like to know?"
+            maxLength={MAX_WELLNESS_QUESTION_CHARS}
+            multiline
+            onChangeText={(value) => {
+              setQuestion(value);
+              setQuestionError('');
+            }}
+          />
+          <PrimaryButton
+            label={asking ? 'Asking...' : 'Ask'}
+            disabled={asking}
+            onPress={handleAskQuestion}
+          />
+        </View>
+
+        {asking ? (
+          <View
+            accessibilityLabel="Preparing wellness answer"
+            accessibilityRole="progressbar"
+            style={styles.wellnessAnswerStatus}
+          >
+            <ActivityIndicator color={palette.purple} size="small" />
+            <Text style={styles.bodyText}>Preparing an answer...</Text>
+          </View>
+        ) : null}
+
+        {questionError ? (
+          <Text accessibilityLiveRegion="polite" style={styles.errorText}>
+            {questionError}
+          </Text>
+        ) : null}
+
+        {answer ? (
+          <View accessibilityLiveRegion="polite" style={styles.wellnessAnswer}>
+            <Text style={styles.bodyText}>{answer}</Text>
+          </View>
+        ) : null}
       </View>
     </View>
   );
@@ -1914,9 +2069,9 @@ function SettingsScreen({
             setDraft({ ...draft, privacyLockEnabled })
           }
         />
-        <Text style={styles.sectionLabel}>LLM prototype</Text>
+        <Text style={styles.sectionLabel}>Daily Flow Pro+</Text>
         <ToggleRow
-          label="LLM wellness notes"
+          label="Daily Flow Pro+"
           value={draft.llmWellnessNotesEnabled}
           onValueChange={(llmWellnessNotesEnabled) =>
             setDraft({ ...draft, llmWellnessNotesEnabled })
@@ -1968,8 +2123,8 @@ function SettingsScreen({
         <Text style={styles.privacyTitle}>Sensitive data</Text>
         <Text style={styles.bodyText}>
           Data is stored locally on this device. Private reminders hide bowel
-          movement wording from notification text. LLM wellness notes send only
-          summary counts to your configured proxy when enabled.
+          movement wording from notification text. Daily Flow Pro+ sends summary
+          counts and any question you choose to submit to your configured proxy.
         </Text>
       </View>
 
@@ -2388,10 +2543,13 @@ const styles = StyleSheet.create({
     borderColor: palette.border,
     borderRadius: 24,
     borderWidth: 1,
-    flexDirection: 'row',
+    gap: 8,
     marginBottom: 14,
     padding: 5,
     ...cardShadow,
+  },
+  primaryTabRow: {
+    flexDirection: 'row',
   },
   tabButton: {
     alignItems: 'center',
@@ -2414,6 +2572,27 @@ const styles = StyleSheet.create({
   },
   activeTabText: {
     color: palette.surface,
+  },
+  flowBetterTabOutline: {
+    borderRadius: 19,
+    padding: 2,
+  },
+  flowBetterTabButton: {
+    alignItems: 'center',
+    backgroundColor: palette.surface,
+    borderRadius: 17,
+    justifyContent: 'center',
+    minHeight: 50,
+    paddingHorizontal: 12,
+  },
+  activeFlowBetterTabButton: {
+    backgroundColor: palette.purple,
+  },
+  flowBetterTabText: {
+    color: palette.purple,
+    fontSize: 16,
+    fontWeight: '900',
+    textAlign: 'center',
   },
   content: {
     paddingBottom: 34,
@@ -2478,6 +2657,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     flexDirection: 'row',
     gap: 10,
+  },
+  wellnessQuestionForm: {
+    marginTop: 16,
+  },
+  wellnessAnswerStatus: {
+    alignItems: 'center',
+    borderTopColor: palette.border,
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 18,
+    paddingTop: 16,
+  },
+  wellnessAnswer: {
+    borderTopColor: palette.border,
+    borderTopWidth: 1,
+    marginTop: 18,
+    paddingTop: 16,
   },
   kicker: {
     color: palette.purple,
