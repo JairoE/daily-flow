@@ -6,7 +6,10 @@ export const DEFAULT_ALLOWED_ORIGINS =
 export const DEFAULT_MODEL = 'gpt-5.6';
 export const DEFAULT_PORT = 8787;
 export const MAX_BODY_BYTES = 4096;
+export const MAX_QUESTION_CHARS = 500;
+export const MAX_ANSWER_CHARS = 1600;
 export const WELLNESS_NOTE_PATH = '/wellness-note';
+export const WELLNESS_QUESTION_PATH = '/wellness-question';
 
 const requiredSummaryKeys = [
   'summaryWindowDays',
@@ -47,6 +50,16 @@ export const wellnessNoteInstructions = [
   'Do not mention exact dates, private data, or that you are an AI.',
   'Use calm, non-judgmental language and clinician-discussion framing when patterns seem noteworthy.',
   'Return one sentence, at most 32 words.',
+].join(' ');
+
+export const wellnessQuestionInstructions = [
+  'Answer one gastrointestinal wellness or bowel-pattern question.',
+  'Use the supplied summary only when it is relevant.',
+  'Be concise, calm, non-judgmental, and educational.',
+  'Do not diagnose, prescribe, recommend medication, give dosage instructions, or make treatment claims.',
+  'Do not present the answer as a substitute for a clinician.',
+  'Encourage clinician discussion for concerning patterns and urgent professional help for potentially urgent wording.',
+  'If the question is unrelated or cannot be answered safely, state that limitation briefly.',
 ].join(' ');
 
 export function parseAllowedOrigins(
@@ -161,6 +174,51 @@ export function validateWellnessNotePayload(value) {
   };
 }
 
+export function validateWellnessQuestionPayload(value) {
+  if (!isPlainRecord(value)) {
+    return { ok: false, status: 400, error: 'Expected a JSON object.' };
+  }
+
+  if (hasForbiddenRawDataKeys(value)) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'Raw history, notes, dates, profile, or notification data is not allowed.',
+    };
+  }
+
+  for (const key of Object.keys(value)) {
+    if (key !== 'question' && key !== 'summary') {
+      return { ok: false, status: 400, error: `Unexpected field: ${key}` };
+    }
+  }
+
+  if (typeof value.question !== 'string') {
+    return { ok: false, status: 400, error: 'question must be a string.' };
+  }
+
+  const question = value.question.trim();
+
+  if (!question || question.length > MAX_QUESTION_CHARS) {
+    return {
+      ok: false,
+      status: 400,
+      error: `question must be 1-${MAX_QUESTION_CHARS} characters.`,
+    };
+  }
+
+  const summary = validateWellnessNotePayload(value.summary);
+
+  if (!summary.ok) {
+    return summary;
+  }
+
+  return {
+    ok: true,
+    payload: { question, summary: summary.payload },
+  };
+}
+
 export function validateRequestPolicy({
   method,
   pathname,
@@ -171,7 +229,14 @@ export function validateRequestPolicy({
   allowedOrigins,
   accessToken,
 }) {
-  if (pathname !== WELLNESS_NOTE_PATH) {
+  const kind =
+    pathname === WELLNESS_NOTE_PATH
+      ? 'note'
+      : pathname === WELLNESS_QUESTION_PATH
+        ? 'question'
+        : null;
+
+  if (!kind) {
     return { ok: false, status: 404, error: 'Not found.' };
   }
 
@@ -195,7 +260,12 @@ export function validateRequestPolicy({
     return { ok: false, status: 413, error: 'Request body is too large.' };
   }
 
-  return validateWellnessNotePayload(body);
+  const validation =
+    kind === 'note'
+      ? validateWellnessNotePayload(body)
+      : validateWellnessQuestionPayload(body);
+
+  return validation.ok ? { ...validation, kind } : validation;
 }
 
 function corsHeaders(origin, allowedOrigins) {
@@ -284,14 +354,18 @@ export function extractOpenAiText(value) {
   return null;
 }
 
-function normalizeGeneratedNote(note) {
-  if (typeof note !== 'string') {
+function normalizeGeneratedText(value, maxLength) {
+  if (typeof value !== 'string') {
     return null;
   }
 
-  const trimmed = note.replace(/\s+/g, ' ').trim();
+  const trimmed = value.replace(/\s+/g, ' ').trim();
 
-  return trimmed.length > 0 && trimmed.length <= 280 ? trimmed : null;
+  return trimmed.length > 0 && trimmed.length <= maxLength ? trimmed : null;
+}
+
+function normalizeGeneratedNote(note) {
+  return normalizeGeneratedText(note, 280);
 }
 
 function readString(value) {
@@ -428,7 +502,106 @@ export async function requestOpenAiWellnessNote({
   }
 }
 
-export async function handleProxyRequest(request, response, env = process.env) {
+export async function requestOpenAiWellnessAnswer({
+  payload,
+  apiKey,
+  model = DEFAULT_MODEL,
+  fetchImpl = fetch,
+  logger = console,
+  timeoutMs = 8000,
+}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    logger.info?.('wellness-question: requesting OpenAI', { model });
+
+    let response;
+
+    try {
+      response = await fetchImpl('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model,
+          reasoning: { effort: 'none' },
+          instructions: wellnessQuestionInstructions,
+          input: `Question: ${payload.question}\nSummary: ${JSON.stringify(payload.summary)}`,
+          max_output_tokens: 512,
+          store: false,
+        }),
+        signal: controller.signal,
+      });
+    } catch (caught) {
+      logger.error?.('wellness-question: OpenAI transport failed', {
+        errorName:
+          caught && typeof caught.name === 'string' ? caught.name : 'Error',
+        model,
+      });
+      throw caught;
+    }
+
+    if (!response.ok) {
+      const responseValue = await readOpenAiResponseJson(response);
+      const providerError =
+        isPlainRecord(responseValue) && isPlainRecord(responseValue.error)
+          ? responseValue.error
+          : {};
+
+      logger.error?.('wellness-question: OpenAI rejected request', {
+        errorCode: readString(providerError.code),
+        errorType: readString(providerError.type),
+        httpStatus: readNumber(response.status),
+        model,
+        requestId: response.headers?.get?.('x-request-id') ?? null,
+      });
+      throw new Error('OpenAI request failed.');
+    }
+
+    const responseValue = await readOpenAiResponseJson(response);
+    const visibleText = extractOpenAiText(responseValue) ?? '';
+    const answer = normalizeGeneratedText(visibleText, MAX_ANSWER_CHARS);
+    const metadata = getOpenAiResponseMetadata(
+      responseValue,
+      model,
+      visibleText,
+    );
+
+    if (!answer) {
+      logger.warn?.('wellness-question: OpenAI returned no usable answer', {
+        hasVisibleText: metadata.hasVisibleText,
+        incompleteReason: metadata.incompleteReason,
+        model: metadata.model,
+        outputTokens: metadata.outputTokens,
+        reasoningTokens: metadata.reasoningTokens,
+        responseId: metadata.responseId,
+        status: metadata.status,
+        visibleTextLength: metadata.visibleTextLength,
+      });
+      return null;
+    }
+
+    logger.info?.('wellness-question: generated answer', {
+      model: metadata.model,
+      outputTokens: metadata.outputTokens,
+      reasoningTokens: metadata.reasoningTokens,
+      responseId: metadata.responseId,
+    });
+    return answer;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function handleProxyRequest(
+  request,
+  response,
+  env = process.env,
+  dependencies = {},
+) {
   const allowedOrigins = parseAllowedOrigins(env.ALLOWED_ORIGINS);
   const origin = request.headers.origin ?? '';
   const headers = corsHeaders(origin, allowedOrigins);
@@ -485,10 +658,35 @@ export async function handleProxyRequest(request, response, env = process.env) {
   }
 
   try {
+    if (validation.kind === 'question') {
+      const answer = await requestOpenAiWellnessAnswer({
+        payload: validation.payload,
+        apiKey: env.OPENAI_API_KEY,
+        model: env.OPENAI_MODEL || DEFAULT_MODEL,
+        fetchImpl: dependencies.fetchImpl,
+        logger: dependencies.logger,
+      });
+
+      if (!answer) {
+        sendJson(
+          response,
+          502,
+          { error: 'Unable to generate a safe answer.' },
+          headers,
+        );
+        return;
+      }
+
+      sendJson(response, 200, { answer }, headers);
+      return;
+    }
+
     const note = await requestOpenAiWellnessNote({
       payload: validation.payload,
       apiKey: env.OPENAI_API_KEY,
       model: env.OPENAI_MODEL || DEFAULT_MODEL,
+      fetchImpl: dependencies.fetchImpl,
+      logger: dependencies.logger,
     });
 
     if (!note) {
@@ -498,13 +696,23 @@ export async function handleProxyRequest(request, response, env = process.env) {
 
     sendJson(response, 200, { note }, headers);
   } catch {
-    sendJson(response, 502, { error: 'Unable to generate a note.' }, headers);
+    sendJson(
+      response,
+      502,
+      {
+        error:
+          validation.kind === 'question'
+            ? 'Unable to generate an answer.'
+            : 'Unable to generate a note.',
+      },
+      headers,
+    );
   }
 }
 
-export function createServer(env = process.env) {
+export function createServer(env = process.env, dependencies = {}) {
   return http.createServer((request, response) => {
-    handleProxyRequest(request, response, env).catch(() => {
+    handleProxyRequest(request, response, env, dependencies).catch(() => {
       sendJson(response, 500, { error: 'Unexpected proxy error.' });
     });
   });
