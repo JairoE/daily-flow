@@ -133,4 +133,9 @@ export type TrendSummary = {
   intervals: IntervalPoint[];
 };
 
-export type TabKey = 'today' | 'history' | 'trends' | 'settings';
+export type TabKey =
+  | 'today'
+  | 'flow-better'
+  | 'history'
+  | 'trends'
+  | 'settings';
