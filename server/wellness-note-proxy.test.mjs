@@ -379,6 +379,29 @@ test('returns a normalized note from a mocked OpenAI response', async () => {
   ]);
 });
 
+test('validates note length before changing internal whitespace', async () => {
+  const overLimitNote = `${'a'.repeat(140)}  ${'b'.repeat(139)}`;
+
+  assert.equal(overLimitNote.length, 281);
+
+  const note = await requestOpenAiWellnessNote({
+    payload,
+    apiKey: 'test-key',
+    model: 'test-model',
+    logger: {
+      info() {},
+      warn() {},
+      error() {},
+    },
+    fetchImpl: async () => ({
+      ok: true,
+      json: async () => ({ output_text: overLimitNote }),
+    }),
+  });
+
+  assert.equal(note, null);
+});
+
 test('logs privacy-safe metadata when OpenAI returns no visible note', async () => {
   const logs = [];
   const note = await requestOpenAiWellnessNote({

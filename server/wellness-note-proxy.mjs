@@ -369,7 +369,13 @@ function normalizeGeneratedText(value, maxLength) {
 }
 
 function normalizeGeneratedNote(note) {
-  return normalizeGeneratedText(note, 280);
+  if (typeof note !== 'string') {
+    return null;
+  }
+
+  const trimmed = note.trim();
+
+  return trimmed.length > 0 && trimmed.length <= 280 ? trimmed : null;
 }
 
 function readString(value) {
