@@ -1035,7 +1035,9 @@ export function FlowBetterScreen({
   ]);
 
   async function handleAskQuestion() {
-    if (!question.trim()) {
+    const submittedQuestion = question.trim();
+
+    if (!submittedQuestion) {
       setQuestionError('Enter a question first.');
       return;
     }
@@ -1047,7 +1049,7 @@ export function FlowBetterScreen({
     try {
       const result = await requestLlmWellnessAnswer(
         profile,
-        question,
+        submittedQuestion,
         buildLlmWellnessNotePayload(trends),
       );
 
@@ -1106,8 +1108,10 @@ export function FlowBetterScreen({
             placeholder="What would you like to know?"
             maxLength={MAX_WELLNESS_QUESTION_CHARS}
             multiline
+            editable={!asking}
             onChangeText={(value) => {
               setQuestion(value);
+              setAnswer('');
               setQuestionError('');
             }}
           />
@@ -2152,6 +2156,7 @@ function LabeledInput({
   maxLength,
   multiline,
   secureTextEntry,
+  editable = true,
 }: {
   label: string;
   value: string;
@@ -2161,6 +2166,7 @@ function LabeledInput({
   maxLength?: number;
   multiline?: boolean;
   secureTextEntry?: boolean;
+  editable?: boolean;
 }) {
   return (
     <View style={styles.inputGroup}>
@@ -2174,6 +2180,7 @@ function LabeledInput({
         maxLength={maxLength}
         multiline={multiline}
         secureTextEntry={secureTextEntry}
+        editable={editable}
         onChangeText={onChangeText}
         textAlignVertical={multiline ? 'top' : 'center'}
       />

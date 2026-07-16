@@ -1,5 +1,6 @@
 import { createElement } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { TextInput } from 'react-native';
 
 jest.mock('../services/notifications', () => ({
   configureNotificationBehavior: jest.fn(),
@@ -19,9 +20,23 @@ jest.mock('../storage/database', () => ({
   saveProfile: jest.fn(),
   upsertDailyEntry: jest.fn(),
 }));
+jest.mock('../lib/llmWellnessNotes', () => ({
+  ...jest.requireActual('../lib/llmWellnessNotes'),
+  requestLlmWellnessNote: jest.fn(async () => null),
+}));
+jest.mock('../lib/llmWellnessQuestions', () => ({
+  ...jest.requireActual('../lib/llmWellnessQuestions'),
+  requestLlmWellnessAnswer: jest.fn(),
+}));
 
 import { FlowBetterScreen, TodayScreen } from '../../App';
+import { requestLlmWellnessAnswer } from '../lib/llmWellnessQuestions';
 import type { Profile, TrendSummary } from '../types';
+
+const mockRequestLlmWellnessAnswer =
+  requestLlmWellnessAnswer as jest.MockedFunction<
+    typeof requestLlmWellnessAnswer
+  >;
 
 const profile: Profile = {
   id: 'local-profile',
@@ -77,6 +92,10 @@ function renderedText(renderer: ReactTestRenderer): string {
 }
 
 describe('Flow Better screen', () => {
+  beforeEach(() => {
+    mockRequestLlmWellnessAnswer.mockReset();
+  });
+
   it('keeps the Today screen focused on daily logging', () => {
     let renderer: ReactTestRenderer;
 
@@ -110,5 +129,66 @@ describe('Flow Better screen', () => {
 
     expect(text).toContain('Gentle wellness note');
     expect(text).toContain('Ask about your flow');
+  });
+
+  it('keeps a pending answer aligned with its submitted question', async () => {
+    let resolveAnswer: (
+      result: Awaited<ReturnType<typeof requestLlmWellnessAnswer>>,
+    ) => void = () => undefined;
+    mockRequestLlmWellnessAnswer.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveAnswer = resolve;
+        }),
+    );
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(
+        createElement(FlowBetterScreen, {
+          localDate: '2026-07-16',
+          profile: {
+            ...profile,
+            llmWellnessNotesEnabled: true,
+            llmWellnessNoteEndpoint:
+              'https://example.ngrok.app/wellness-note',
+            llmWellnessNoteAccessToken: 'test-token',
+          },
+          trends,
+        }),
+      );
+    });
+
+    const input = renderer!.root.findByType(TextInput);
+
+    act(() => {
+      input.props.onChangeText('What may support regularity?');
+    });
+
+    const askButton = renderer!.root.findByProps({
+      accessibilityLabel: 'Ask',
+    });
+
+    await act(async () => {
+      askButton.props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(renderer!.root.findByType(TextInput).props.editable).toBe(false);
+
+    await act(async () => {
+      resolveAnswer({ ok: true, answer: 'A gentle answer.' });
+      await Promise.resolve();
+    });
+
+    expect(renderedText(renderer!)).toContain('A gentle answer.');
+
+    act(() => {
+      renderer!.root
+        .findByType(TextInput)
+        .props.onChangeText('What about hydration?');
+    });
+
+    expect(renderedText(renderer!)).not.toContain('A gentle answer.');
   });
 });
