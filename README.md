@@ -91,6 +91,21 @@ npm test
 - Trend helper tests cover legacy entries, Bristol distribution, symptoms, laxative use, notes, gaps, weekly bars, rolling 7-day counts, and intervals.
 - Storage adapters normalize old data into the current entry shape.
 - Charts are built with React Native `View` and `Text` primitives instead of a chart dependency.
+- Optional LLM wellness notes are a local prototype feature. The app sends only summary counts to a configured proxy and falls back to local notes on any error.
+
+### Local LLM Proxy
+
+Run the local proxy before exposing it with ngrok:
+
+```bash
+OPENAI_API_KEY=sk-... \
+LLM_PROXY_ACCESS_TOKEN=choose-a-test-token \
+npm run llm:server
+```
+
+Then expose `http://localhost:8787` with ngrok and enter the ngrok
+`/wellness-note` URL plus the same access token in Settings. Keep this for one
+trusted tester; use a hosted backend before a wider beta.
 
 ## Verify
 

@@ -28,10 +28,11 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
+    "llm:server": "node server/wellness-note-proxy.mjs",
     "predeploy": "expo export -p web",
     "deploy": "gh-pages --nojekyll -d dist",
     "typecheck": "tsc --noEmit",
-    "test": "jest --runInBand"
+    "test": "jest --runInBand && node --test server/*.test.mjs"
   },
   "private": true,
   "jest": {

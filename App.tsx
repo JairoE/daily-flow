@@ -54,6 +54,10 @@ import {
   getDailyOpenLoveNotice,
   isDailyOpenLoveNoticeMessage,
 } from './src/lib/dailyOpenNotice';
+import {
+  buildLlmWellnessNotePayload,
+  requestLlmWellnessNote,
+} from './src/lib/llmWellnessNotes';
 import { getFallbackWellnessNote } from './src/lib/wellnessNotes';
 import type {
   DailyEntry,
@@ -382,6 +386,8 @@ export default function App() {
               entry={todayEntry}
               includeTodayAsMissed={includeTodayAsMissed}
               localDate={today}
+              profile={profile}
+              trends={trends}
               onLog={handleLog}
             />
           ) : null}
@@ -675,11 +681,15 @@ function TodayScreen({
   entry,
   includeTodayAsMissed,
   localDate,
+  profile,
+  trends,
   onLog,
 }: {
   entry: DailyEntry | null;
   includeTodayAsMissed: boolean;
   localDate: string;
+  profile: Profile;
+  trends: TrendSummary;
   onLog: (input: DailyEntryInput) => Promise<void>;
 }) {
   const [hadBowelMovement, setHadBowelMovement] = useState<boolean | null>(
@@ -697,6 +707,7 @@ function TodayScreen({
   const [laxativeNote, setLaxativeNote] = useState(entry?.laxativeNote ?? '');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [llmWellnessNote, setLlmWellnessNote] = useState<string | null>(null);
 
   useEffect(() => {
     setHadBowelMovement(entry?.hadBowelMovement ?? null);
@@ -706,6 +717,29 @@ function TodayScreen({
     setLaxativeNote(entry?.laxativeNote ?? '');
     setError('');
   }, [entry]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setLlmWellnessNote(null);
+    requestLlmWellnessNote(profile, buildLlmWellnessNotePayload(trends)).then(
+      (note) => {
+        if (!cancelled) {
+          setLlmWellnessNote(note);
+        }
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    localDate,
+    profile.llmWellnessNoteAccessToken,
+    profile.llmWellnessNoteEndpoint,
+    profile.llmWellnessNotesEnabled,
+    trends,
+  ]);
 
   function handleChoice(value: boolean) {
     setHadBowelMovement(value);
@@ -762,7 +796,7 @@ function TodayScreen({
     : includeTodayAsMissed
       ? 'Not checked in yet'
       : 'Ready when you are';
-  const wellnessNote = getFallbackWellnessNote(localDate);
+  const wellnessNote = llmWellnessNote ?? getFallbackWellnessNote(localDate);
 
   return (
     <View>
@@ -1848,6 +1882,35 @@ function SettingsScreen({
             setDraft({ ...draft, privacyLockEnabled })
           }
         />
+        <Text style={styles.sectionLabel}>LLM prototype</Text>
+        <ToggleRow
+          label="LLM wellness notes"
+          value={draft.llmWellnessNotesEnabled}
+          onValueChange={(llmWellnessNotesEnabled) =>
+            setDraft({ ...draft, llmWellnessNotesEnabled })
+          }
+        />
+        {draft.llmWellnessNotesEnabled ? (
+          <>
+            <LabeledInput
+              label="Endpoint URL"
+              value={draft.llmWellnessNoteEndpoint}
+              placeholder="https://your-ngrok-domain/wellness-note"
+              onChangeText={(llmWellnessNoteEndpoint) =>
+                setDraft({ ...draft, llmWellnessNoteEndpoint })
+              }
+            />
+            <LabeledInput
+              label="Access code"
+              value={draft.llmWellnessNoteAccessToken}
+              placeholder="Local proxy token"
+              secureTextEntry
+              onChangeText={(llmWellnessNoteAccessToken) =>
+                setDraft({ ...draft, llmWellnessNoteAccessToken })
+              }
+            />
+          </>
+        ) : null}
         <PrimaryButton
           label={saving ? 'Saving...' : 'Save settings'}
           disabled={saving}
@@ -1873,7 +1936,8 @@ function SettingsScreen({
         <Text style={styles.privacyTitle}>Sensitive data</Text>
         <Text style={styles.bodyText}>
           Data is stored locally on this device. Private reminders hide bowel
-          movement wording from notification text.
+          movement wording from notification text. LLM wellness notes send only
+          summary counts to your configured proxy when enabled.
         </Text>
       </View>
 
@@ -1900,6 +1964,7 @@ function LabeledInput({
   keyboardType,
   maxLength,
   multiline,
+  secureTextEntry,
 }: {
   label: string;
   value: string;
@@ -1908,6 +1973,7 @@ function LabeledInput({
   keyboardType?: 'default' | 'numbers-and-punctuation';
   maxLength?: number;
   multiline?: boolean;
+  secureTextEntry?: boolean;
 }) {
   return (
     <View style={styles.inputGroup}>
@@ -1920,6 +1986,7 @@ function LabeledInput({
         keyboardType={keyboardType}
         maxLength={maxLength}
         multiline={multiline}
+        secureTextEntry={secureTextEntry}
         onChangeText={onChangeText}
         textAlignVertical={multiline ? 'top' : 'center'}
       />

@@ -20,6 +20,9 @@ type ProfileRow = {
   reminders_enabled: number;
   private_notifications: number;
   privacy_lock_enabled: number;
+  llm_wellness_notes_enabled: number;
+  llm_wellness_note_endpoint: string;
+  llm_wellness_note_access_token: string;
   daily_open_love_shown_date: string | null;
   created_at: string;
   updated_at: string;
@@ -60,6 +63,9 @@ CREATE TABLE IF NOT EXISTS profile (
   reminders_enabled INTEGER NOT NULL,
   private_notifications INTEGER NOT NULL,
   privacy_lock_enabled INTEGER NOT NULL,
+  llm_wellness_notes_enabled INTEGER NOT NULL DEFAULT 0,
+  llm_wellness_note_endpoint TEXT NOT NULL DEFAULT '',
+  llm_wellness_note_access_token TEXT NOT NULL DEFAULT '',
   daily_open_love_shown_date TEXT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
@@ -105,6 +111,18 @@ const defaultSymptoms: DailySymptoms = {
 };
 
 const profileMigrations: { name: string; sql: string }[] = [
+  {
+    name: 'llm_wellness_notes_enabled',
+    sql: 'ALTER TABLE profile ADD COLUMN llm_wellness_notes_enabled INTEGER NOT NULL DEFAULT 0',
+  },
+  {
+    name: 'llm_wellness_note_endpoint',
+    sql: "ALTER TABLE profile ADD COLUMN llm_wellness_note_endpoint TEXT NOT NULL DEFAULT ''",
+  },
+  {
+    name: 'llm_wellness_note_access_token',
+    sql: "ALTER TABLE profile ADD COLUMN llm_wellness_note_access_token TEXT NOT NULL DEFAULT ''",
+  },
   {
     name: 'daily_open_love_shown_date',
     sql: 'ALTER TABLE profile ADD COLUMN daily_open_love_shown_date TEXT NULL',
@@ -230,6 +248,9 @@ function mapProfile(row: ProfileRow): Profile {
     remindersEnabled: row.reminders_enabled === 1,
     privateNotifications: row.private_notifications === 1,
     privacyLockEnabled: row.privacy_lock_enabled === 1,
+    llmWellnessNotesEnabled: row.llm_wellness_notes_enabled === 1,
+    llmWellnessNoteEndpoint: row.llm_wellness_note_endpoint ?? '',
+    llmWellnessNoteAccessToken: row.llm_wellness_note_access_token ?? '',
     dailyOpenLoveShownDate: row.daily_open_love_shown_date ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -288,6 +309,9 @@ export function createProfile(values: {
     remindersEnabled: values.remindersEnabled,
     privateNotifications: values.privateNotifications,
     privacyLockEnabled: false,
+    llmWellnessNotesEnabled: false,
+    llmWellnessNoteEndpoint: '',
+    llmWellnessNoteAccessToken: '',
     dailyOpenLoveShownDate: null,
     createdAt: now,
     updatedAt: now,
@@ -319,10 +343,13 @@ export async function saveProfile(profile: Profile): Promise<Profile> {
       reminders_enabled,
       private_notifications,
       privacy_lock_enabled,
+      llm_wellness_notes_enabled,
+      llm_wellness_note_endpoint,
+      llm_wellness_note_access_token,
       daily_open_love_shown_date,
       created_at,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       display_name = excluded.display_name,
       timezone = excluded.timezone,
@@ -330,6 +357,9 @@ export async function saveProfile(profile: Profile): Promise<Profile> {
       reminders_enabled = excluded.reminders_enabled,
       private_notifications = excluded.private_notifications,
       privacy_lock_enabled = excluded.privacy_lock_enabled,
+      llm_wellness_notes_enabled = excluded.llm_wellness_notes_enabled,
+      llm_wellness_note_endpoint = excluded.llm_wellness_note_endpoint,
+      llm_wellness_note_access_token = excluded.llm_wellness_note_access_token,
       daily_open_love_shown_date = excluded.daily_open_love_shown_date,
       updated_at = excluded.updated_at`,
     [
@@ -340,6 +370,9 @@ export async function saveProfile(profile: Profile): Promise<Profile> {
       nextProfile.remindersEnabled ? 1 : 0,
       nextProfile.privateNotifications ? 1 : 0,
       nextProfile.privacyLockEnabled ? 1 : 0,
+      nextProfile.llmWellnessNotesEnabled ? 1 : 0,
+      nextProfile.llmWellnessNoteEndpoint.trim(),
+      nextProfile.llmWellnessNoteAccessToken.trim(),
       nextProfile.dailyOpenLoveShownDate,
       nextProfile.createdAt,
       nextProfile.updatedAt,
