@@ -74,8 +74,17 @@ function normalizeProfile(rawProfile: Profile | null | undefined): Profile | nul
     return null;
   }
 
+  const raw = rawProfile as Profile & {
+    llmWellnessNotesEnabled?: boolean;
+    llmWellnessNoteEndpoint?: string;
+    llmWellnessNoteAccessToken?: string;
+  };
+
   return {
     ...rawProfile,
+    llmWellnessNotesEnabled: raw.llmWellnessNotesEnabled ?? false,
+    llmWellnessNoteEndpoint: raw.llmWellnessNoteEndpoint ?? '',
+    llmWellnessNoteAccessToken: raw.llmWellnessNoteAccessToken ?? '',
     dailyOpenLoveShownDate: rawProfile.dailyOpenLoveShownDate ?? null,
   };
 }
@@ -152,6 +161,9 @@ export function createProfile(values: {
     remindersEnabled: values.remindersEnabled,
     privateNotifications: values.privateNotifications,
     privacyLockEnabled: false,
+    llmWellnessNotesEnabled: false,
+    llmWellnessNoteEndpoint: '',
+    llmWellnessNoteAccessToken: '',
     dailyOpenLoveShownDate: null,
     createdAt: now,
     updatedAt: now,

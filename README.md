@@ -63,6 +63,17 @@ npm test
 - Data completeness chart showing answered days and missed check-ins.
 - Empty states for charts that need more check-ins.
 
+### Daily Flow Pro+
+
+- Enable Daily Flow Pro+ in Settings to reveal the centered `Flow better ✨`
+  tab.
+- Receive a generated gentle wellness note when the configured proxy is
+  available, with a local daily fallback if generation fails.
+- Ask a gastrointestinal wellness question and receive a concise,
+  non-diagnostic answer from the configured LLM.
+- Send only summary counts plus the question the user explicitly submits. The
+  app does not send names, exact dates, free-text check-in notes, or raw history.
+
 ### Settings And Reminders
 
 - Create and edit a local profile.
@@ -91,6 +102,26 @@ npm test
 - Trend helper tests cover legacy entries, Bristol distribution, symptoms, laxative use, notes, gaps, weekly bars, rolling 7-day counts, and intervals.
 - Storage adapters normalize old data into the current entry shape.
 - Charts are built with React Native `View` and `Text` primitives instead of a chart dependency.
+- Daily Flow Pro+ is a local prototype feature. The app sends summary counts
+  for notes and summary counts plus a user-submitted question for Q&A. It falls
+  back to local notes on any note-generation error.
+
+### Local LLM Proxy
+
+Run the local proxy before exposing it with ngrok:
+
+```bash
+OPENAI_API_KEY=sk-... \
+LLM_PROXY_ACCESS_TOKEN=choose-a-test-token \
+npm run llm:server
+```
+
+Then expose `http://localhost:8787` with ngrok and enter the ngrok
+`/wellness-note` URL plus the same access token in Settings. The app derives the
+matching `/wellness-question` route from that URL. A phone on the same Wi-Fi can
+also use `http://<computer-lan-ip>:8787/wellness-note` when that origin is listed
+in `ALLOWED_ORIGINS`. Keep this for one trusted tester; use a hosted backend
+before a wider beta.
 
 ## Verify
 

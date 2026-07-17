@@ -6,6 +6,9 @@ export type Profile = {
   remindersEnabled: boolean;
   privateNotifications: boolean;
   privacyLockEnabled: boolean;
+  llmWellnessNotesEnabled: boolean;
+  llmWellnessNoteEndpoint: string;
+  llmWellnessNoteAccessToken: string;
   dailyOpenLoveShownDate: string | null;
   createdAt: string;
   updatedAt: string;
@@ -130,4 +133,9 @@ export type TrendSummary = {
   intervals: IntervalPoint[];
 };
 
-export type TabKey = 'today' | 'history' | 'trends' | 'settings';
+export type TabKey =
+  | 'today'
+  | 'flow-better'
+  | 'history'
+  | 'trends'
+  | 'settings';
