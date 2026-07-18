@@ -328,6 +328,56 @@ describe('Flow Better screen', () => {
     );
   });
 
+  it('keeps future calendar days read-only', () => {
+    const futureEntry = {
+      ...dailyEntry('future', '2026-07-18T12:00:00.000Z', true),
+      localDate: '2026-07-18',
+    };
+    let renderer: ReactTestRenderer;
+
+    act(() => {
+      renderer = create(
+        createElement(HistoryScreen, {
+          monthDays: [
+            {
+              localDate: '2026-07-16',
+              label: 'Yesterday',
+              status: 'missed',
+              entries: [],
+              isCurrentMonth: true,
+            },
+            {
+              localDate: '2026-07-18',
+              label: 'Tomorrow',
+              status: 'yes',
+              entries: [futureEntry],
+              isCurrentMonth: true,
+            },
+          ],
+          onCreateEntry: async () => undefined,
+          onDeleteEntry: async () => true,
+          onUpdateEntry: async () => futureEntry,
+        }),
+      );
+    });
+
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Tomorrow, 1 log: 1 yes, 0 no',
+      }).props.onPress();
+    });
+
+    expect(renderedText(renderer!)).toContain('Future dates are read-only.');
+    expect(
+      renderer!.root.findAllByProps({ accessibilityLabel: 'Add another log' }),
+    ).toHaveLength(0);
+    expect(
+      renderer!.root.findAllByProps({
+        accessibilityLabel: 'Edit Yes log at 8:00 AM',
+      }),
+    ).toHaveLength(0);
+  });
+
   it('edits one selected-day event by id', async () => {
     const existing = {
       ...dailyEntry('existing', '2026-07-16T08:00:00.000Z', false),

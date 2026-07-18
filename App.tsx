@@ -256,6 +256,10 @@ export default function App() {
       return;
     }
 
+    if (localDate > today) {
+      throw new Error('Choose today or an earlier date.');
+    }
+
     const entry = await createDailyEntry(localDate, input);
     await refreshEntries();
 
@@ -1333,6 +1337,7 @@ function SelectedDayActivity({
   const entries = day?.entries ?? [];
   const yesCount = entries.filter((entry) => entry.hadBowelMovement).length;
   const noCount = entries.length - yesCount;
+  const isFutureDate = localDate > getLocalDateKey();
   const [editor, setEditor] = useState<
     { mode: 'create' } | { mode: 'edit'; entryId: string } | null
   >(null);
@@ -1376,48 +1381,73 @@ function SelectedDayActivity({
         <StatusPill label={`${noCount} No`} tone="coral" />
       </View>
 
+      {isFutureDate ? (
+        <Text style={styles.historyEmptyText}>Future dates are read-only.</Text>
+      ) : null}
+
       {entries.length === 0 ? (
         <Text style={styles.historyEmptyText}>No logs saved for this day.</Text>
       ) : (
-        entries.map((entry) => (
-          <Pressable
-            key={entry.id}
-            accessibilityHint="Opens this individual log for editing"
-            accessibilityLabel={`Edit ${entry.hadBowelMovement ? 'Yes' : 'No'} log at ${formatEntryTime(entry.checkedInAt)}`}
-            accessibilityRole="button"
-            onPress={() => setEditor({ mode: 'edit', entryId: entry.id })}
-            style={({ pressed }) => [
-              styles.entryTimelineRow,
-              styles.historyEntryButton,
-              pressed && styles.pressedControl,
-            ]}
-            testID={`history-entry-${entry.id}`}
-          >
-            <Text style={styles.entryTimelineTime}>
-              {formatEntryTime(entry.checkedInAt)}
-            </Text>
-            <View style={styles.entryTimelineContent}>
-              <Text style={styles.entryTimelineTitle}>
-                {entry.hadBowelMovement
-                  ? `Bowel movement${entry.stoolType ? ` · Bristol ${entry.stoolType}` : ''}`
-                  : 'No movement'}
+        entries.map((entry) => {
+          const content = (
+            <>
+              <Text style={styles.entryTimelineTime}>
+                {formatEntryTime(entry.checkedInAt)}
               </Text>
-              <Text style={styles.historyDetail}>{entryDetailText(entry)}</Text>
-            </View>
-            <StatusPill
-              label={entry.hadBowelMovement ? 'Yes' : 'No'}
-              tone={entry.hadBowelMovement ? 'green' : 'coral'}
-            />
-          </Pressable>
-        ))
+              <View style={styles.entryTimelineContent}>
+                <Text style={styles.entryTimelineTitle}>
+                  {entry.hadBowelMovement
+                    ? `Bowel movement${entry.stoolType ? ` · Bristol ${entry.stoolType}` : ''}`
+                    : 'No movement'}
+                </Text>
+                <Text style={styles.historyDetail}>{entryDetailText(entry)}</Text>
+              </View>
+              <StatusPill
+                label={entry.hadBowelMovement ? 'Yes' : 'No'}
+                tone={entry.hadBowelMovement ? 'green' : 'coral'}
+              />
+            </>
+          );
+
+          if (isFutureDate) {
+            return (
+              <View
+                key={entry.id}
+                style={[styles.entryTimelineRow, styles.historyEntryButton]}
+              >
+                {content}
+              </View>
+            );
+          }
+
+          return (
+            <Pressable
+              key={entry.id}
+              accessibilityHint="Opens this individual log for editing"
+              accessibilityLabel={`Edit ${entry.hadBowelMovement ? 'Yes' : 'No'} log at ${formatEntryTime(entry.checkedInAt)}`}
+              accessibilityRole="button"
+              onPress={() => setEditor({ mode: 'edit', entryId: entry.id })}
+              style={({ pressed }) => [
+                styles.entryTimelineRow,
+                styles.historyEntryButton,
+                pressed && styles.pressedControl,
+              ]}
+              testID={`history-entry-${entry.id}`}
+            >
+              {content}
+            </Pressable>
+          );
+        })
       )}
 
-      <View style={styles.panelAction}>
-        <PrimaryButton
-          label="Add another log"
-          onPress={() => setEditor({ mode: 'create' })}
-        />
-      </View>
+      {!isFutureDate ? (
+        <View style={styles.panelAction}>
+          <PrimaryButton
+            label="Add another log"
+            onPress={() => setEditor({ mode: 'create' })}
+          />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -1473,6 +1503,11 @@ function HistoryEntryEditor({
   }
 
   async function handleSave() {
+    if (localDate > getLocalDateKey()) {
+      setError('Choose today or an earlier date.');
+      return;
+    }
+
     if (mode === 'edit' && !entry) {
       setError('This log no longer exists. Return to the day and try again.');
       return;
