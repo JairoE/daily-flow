@@ -525,13 +525,6 @@ export async function getEntriesByDate(
   return rows.map(mapEntry);
 }
 
-export async function getEntryByDate(
-  localDate: string,
-): Promise<DailyEntry | null> {
-  const entries = await getEntriesByDate(localDate);
-  return entries.at(-1) ?? null;
-}
-
 export async function createDailyEntry(
   localDate: string,
   input: DailyEntryInput,
@@ -653,20 +646,6 @@ export async function deleteDailyEntry(id: string): Promise<boolean> {
   const db = await getDatabase();
   const result = await db.runAsync('DELETE FROM daily_entries WHERE id = ?', [id]);
   return result.changes > 0;
-}
-
-/** @deprecated Use createDailyEntry or updateDailyEntry with an event id. */
-export async function upsertDailyEntry(
-  localDate: string,
-  input: DailyEntryInput,
-): Promise<DailyEntry> {
-  const existing = await getEntryByDate(localDate);
-
-  if (existing) {
-    return (await updateDailyEntry(existing.id, input)) ?? existing;
-  }
-
-  return createDailyEntry(localDate, input);
 }
 
 export async function getNotificationRecords(): Promise<NotificationRecord[]> {

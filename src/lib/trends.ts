@@ -213,7 +213,6 @@ export function buildHistoryDays(
         label: formatFriendlyDate(localDate, today),
         status: summary.status,
         entries: summary.entries,
-        entry: summary.entries.at(-1) ?? null,
       };
     });
 }
@@ -247,7 +246,6 @@ export function buildMonthHistoryDays(
       label: formatFriendlyDate(localDate, today),
       status: summary.status,
       entries: summary.entries,
-      entry: summary.entries.at(-1) ?? null,
       isCurrentMonth,
     };
   });

@@ -238,12 +238,24 @@ export async function syncNotificationsAfterEntry(
     return;
   }
 
-  const dayEntries = await getEntriesByDate(entry.localDate);
+  await syncNotificationsForDate(profile, entry.localDate);
+}
 
-  if (dayEntries.some((dayEntry) => dayEntry.hadBowelMovement)) {
-    await cancelRecord(
-      await getNotificationRecord(entry.localDate, 'logged_no_wellness'),
-    );
+export async function syncNotificationsForDate(
+  profile: Profile,
+  localDate: string,
+) {
+  const dayEntries = await getEntriesByDate(localDate);
+  const loggedNoRecord = await getNotificationRecord(
+    localDate,
+    'logged_no_wellness',
+  );
+
+  if (
+    dayEntries.length === 0 ||
+    dayEntries.some((dayEntry) => dayEntry.hadBowelMovement)
+  ) {
+    await cancelRecord(loggedNoRecord);
     return;
   }
 

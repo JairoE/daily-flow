@@ -68,8 +68,6 @@ export type HistoryDay = {
   label: string;
   status: HistoryStatus;
   entries: DailyEntry[];
-  /** @deprecated Use entries while the screen migration is in progress. */
-  entry: DailyEntry | null;
 };
 
 export type HistoryMonthDay = HistoryDay & {

@@ -5,6 +5,7 @@ jest.mock('../services/notifications', () => ({
   configureNotificationBehavior: jest.fn(),
   rescheduleProfileNotifications: jest.fn(),
   syncNotificationsAfterEntry: jest.fn(),
+  syncNotificationsForDate: jest.fn(),
 }));
 jest.mock('../services/exportEntries', () => ({
   exportEntriesCsv: jest.fn(),
@@ -62,7 +63,6 @@ describe('CalendarDayButton', () => {
       label: 'Thu, Jul 9',
       status: 'mixed',
       entries,
-      entry: entries[2],
       isCurrentMonth: true,
     };
     let renderer: ReactTestRenderer;

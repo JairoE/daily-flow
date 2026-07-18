@@ -1,11 +1,12 @@
 import { createElement } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { TextInput } from 'react-native';
+import { Alert, TextInput } from 'react-native';
 
 jest.mock('../services/notifications', () => ({
   configureNotificationBehavior: jest.fn(),
   rescheduleProfileNotifications: jest.fn(),
   syncNotificationsAfterEntry: jest.fn(),
+  syncNotificationsForDate: jest.fn(),
 }));
 jest.mock('../services/exportEntries', () => ({
   exportEntriesCsv: jest.fn(),
@@ -22,7 +23,6 @@ jest.mock('../storage/database', () => ({
   initializeStorage: jest.fn(),
   saveProfile: jest.fn(),
   updateDailyEntry: jest.fn(),
-  upsertDailyEntry: jest.fn(),
 }));
 jest.mock('../lib/llmWellnessNotes', () => ({
   ...jest.requireActual('../lib/llmWellnessNotes'),
@@ -33,7 +33,7 @@ jest.mock('../lib/llmWellnessQuestions', () => ({
   requestLlmWellnessAnswer: jest.fn(),
 }));
 
-import { FlowBetterScreen, TodayScreen } from '../../App';
+import { FlowBetterScreen, HistoryScreen, TodayScreen } from '../../App';
 import { requestLlmWellnessAnswer } from '../lib/llmWellnessQuestions';
 import type { DailyEntry, Profile, TrendSummary } from '../types';
 
@@ -201,6 +201,259 @@ describe('Flow Better screen', () => {
         accessibilityLabel: 'Log no for today',
       }).props.accessibilityState.selected,
     ).toBe(false);
+  });
+
+  it('shows every selected-day event with counts and an add action', () => {
+    const entries = [
+      {
+        ...dailyEntry('no-first', '2026-07-16T08:00:00.000Z', false),
+        localDate: '2026-07-16',
+      },
+      {
+        ...dailyEntry('no-second', '2026-07-16T13:00:00.000Z', false),
+        localDate: '2026-07-16',
+      },
+      {
+        ...dailyEntry('yes-last', '2026-07-16T18:00:00.000Z', true),
+        localDate: '2026-07-16',
+      },
+    ];
+    let renderer: ReactTestRenderer;
+
+    act(() => {
+      renderer = create(
+        createElement(HistoryScreen, {
+          monthDays: [
+            {
+              localDate: '2026-07-16',
+              label: 'Yesterday',
+              status: 'mixed',
+              entries,
+              isCurrentMonth: true,
+            },
+          ],
+          onCreateEntry: async () => undefined,
+          onDeleteEntry: async () => true,
+          onUpdateEntry: async () => entries[0],
+        }),
+      );
+    });
+
+    const text = renderedText(renderer!);
+    expect(text).toContain('Selected day activity');
+    expect(text).toContain('3 logs');
+    expect(text).toContain('1 Yes');
+    expect(text).toContain('2 No');
+    expect(text).toContain('3 logs · 1 Yes · 2 No');
+    const entryTestIds = new Set(
+      renderer!.root
+        .findAll(
+          (node) =>
+            typeof node.props.testID === 'string' &&
+            node.props.testID.startsWith('history-entry-'),
+        )
+        .map((node) => node.props.testID),
+    );
+    expect(entryTestIds.size).toBe(3);
+    expect(
+      renderer!.root.findByProps({ accessibilityLabel: 'Add another log' }),
+    ).toBeTruthy();
+  });
+
+  it('adds another selected-day log without replacing prior events', async () => {
+    const onCreateEntry = jest.fn(async () => undefined);
+    let renderer: ReactTestRenderer;
+
+    act(() => {
+      renderer = create(
+        createElement(HistoryScreen, {
+          monthDays: [
+            {
+              localDate: '2026-07-16',
+              label: 'Yesterday',
+              status: 'yes',
+              entries: [
+                {
+                  ...dailyEntry(
+                    'existing',
+                    '2026-07-16T08:00:00.000Z',
+                    true,
+                  ),
+                  localDate: '2026-07-16',
+                },
+              ],
+              isCurrentMonth: true,
+            },
+          ],
+          onCreateEntry,
+          onDeleteEntry: async () => true,
+          onUpdateEntry: async () => null,
+        }),
+      );
+    });
+
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Add another log',
+      }).props.onPress();
+    });
+
+    expect(renderedText(renderer!)).toContain('Add log');
+
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Choose No for this log',
+      }).props.onPress();
+    });
+
+    await act(async () => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Save new log',
+      }).props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(onCreateEntry).toHaveBeenCalledWith(
+      '2026-07-16',
+      expect.objectContaining({ hadBowelMovement: false }),
+    );
+  });
+
+  it('edits one selected-day event by id', async () => {
+    const existing = {
+      ...dailyEntry('existing', '2026-07-16T08:00:00.000Z', false),
+      localDate: '2026-07-16',
+    };
+    const onUpdateEntry = jest.fn(async (_id, input) => ({
+      ...existing,
+      ...input,
+      stoolType: input.stoolType ?? null,
+    }));
+    let renderer: ReactTestRenderer;
+
+    act(() => {
+      renderer = create(
+        createElement(HistoryScreen, {
+          monthDays: [
+            {
+              localDate: '2026-07-16',
+              label: 'Yesterday',
+              status: 'no',
+              entries: [existing],
+              isCurrentMonth: true,
+            },
+          ],
+          onCreateEntry: async () => undefined,
+          onDeleteEntry: async () => true,
+          onUpdateEntry,
+        }),
+      );
+    });
+
+    act(() => {
+      renderer!.root.findAllByProps({ testID: 'history-entry-existing' })[0]
+        .props.onPress();
+    });
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Choose Yes for this log',
+      }).props.onPress();
+    });
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Select Type 4: Smooth soft shape',
+      }).props.onPress();
+    });
+
+    await act(async () => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Save changes',
+      }).props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(onUpdateEntry).toHaveBeenCalledWith(
+      'existing',
+      expect.objectContaining({
+        hadBowelMovement: true,
+        stoolType: 4,
+      }),
+    );
+  });
+
+  it('confirms deletion of one event and supports the final-entry empty state', async () => {
+    const existing = {
+      ...dailyEntry('existing', '2026-07-16T08:00:00.000Z', false),
+      localDate: '2026-07-16',
+    };
+    const onDeleteEntry = jest.fn(async () => true);
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(
+      (_title, _message, buttons) => {
+        buttons?.find((button) => button.style === 'destructive')?.onPress?.();
+      },
+    );
+    const props = {
+      onCreateEntry: async () => undefined,
+      onDeleteEntry,
+      onUpdateEntry: async () => existing,
+    };
+    let renderer: ReactTestRenderer;
+
+    act(() => {
+      renderer = create(
+        createElement(HistoryScreen, {
+          ...props,
+          monthDays: [
+            {
+              localDate: '2026-07-16',
+              label: 'Yesterday',
+              status: 'no',
+              entries: [existing],
+              isCurrentMonth: true,
+            },
+          ],
+        }),
+      );
+    });
+
+    act(() => {
+      renderer!.root.findAllByProps({ testID: 'history-entry-existing' })[0]
+        .props.onPress();
+    });
+    await act(async () => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Delete this log',
+      }).props.onPress();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(alertSpy).toHaveBeenCalledWith(
+      'Delete this log?',
+      expect.any(String),
+      expect.any(Array),
+    );
+    expect(onDeleteEntry).toHaveBeenCalledWith('existing');
+
+    act(() => {
+      renderer!.update(
+        createElement(HistoryScreen, {
+          ...props,
+          monthDays: [
+            {
+              localDate: '2026-07-16',
+              label: 'Yesterday',
+              status: 'missed',
+              entries: [],
+              isCurrentMonth: true,
+            },
+          ],
+        }),
+      );
+    });
+
+    expect(renderedText(renderer!)).toContain('No logs saved for this day.');
+    alertSpy.mockRestore();
   });
 
   it('owns the wellness note and question experience', () => {

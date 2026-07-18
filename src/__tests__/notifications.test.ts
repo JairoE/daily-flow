@@ -34,7 +34,10 @@ const mockScheduleNotificationAsync =
 const mockCancelScheduledNotificationAsync =
   notificationMocks.cancelScheduledNotificationAsync;
 
-import { syncNotificationsAfterEntry } from '../services/notifications';
+import {
+  syncNotificationsAfterEntry,
+  syncNotificationsForDate,
+} from '../services/notifications';
 import type { DailyEntry, NotificationType, Profile } from '../types';
 
 const profile: Profile = {
@@ -124,5 +127,16 @@ describe('multi-entry notification synchronization', () => {
       'missed_checkin-notification',
     );
     expect(mockGetEntriesByDate).not.toHaveBeenCalled();
+  });
+
+  it('cancels a logged-No reminder after the final event is deleted', async () => {
+    mockGetEntriesByDate.mockResolvedValueOnce([]);
+
+    await syncNotificationsForDate(profile, '2026-07-17');
+
+    expect(mockCancelScheduledNotificationAsync).toHaveBeenCalledWith(
+      'logged_no_wellness-notification',
+    );
+    expect(mockScheduleNotificationAsync).not.toHaveBeenCalled();
   });
 });
