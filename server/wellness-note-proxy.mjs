@@ -13,16 +13,17 @@ export const WELLNESS_QUESTION_PATH = '/wellness-question';
 
 const requiredSummaryKeys = [
   'summaryWindowDays',
+  'bowelMovementCountLast30',
   'bowelMovementDaysLast30',
-  'averagePerWeekLast30',
+  'averageBowelMovementsPerWeekLast30',
   'currentGapDays',
   'longestGapDays',
-  'hardOrLumpyDays',
-  'looseOrWateryDays',
-  'symptomBurdenDays',
-  'laxativeUseDays',
+  'hardOrLumpyMovementsLast30',
+  'looseOrWateryMovementsLast30',
+  'symptomBurdenEntriesLast30',
+  'laxativeUseEntriesLast30',
   'checkInRateLast30',
-  'detailDays',
+  'detailEntriesLast30',
 ];
 
 const requiredSummaryKeySet = new Set(requiredSummaryKeys);
@@ -46,6 +47,7 @@ const forbiddenRawDataKeys = new Set([
 export const wellnessNoteInstructions = [
   'You write one gentle wellness note for a bowel movement tracking app.',
   'Use the provided summary counts only.',
+  'Treat bowelMovementCountLast30 as movement events and bowelMovementDaysLast30 as unique calendar days.',
   'Do not diagnose, treat, prescribe, recommend medication, or give dosage instructions.',
   'Do not mention exact dates, private data, or that you are an AI.',
   'Use calm, non-judgmental language and clinician-discussion framing when patterns seem noteworthy.',
@@ -55,6 +57,7 @@ export const wellnessNoteInstructions = [
 export const wellnessQuestionInstructions = [
   'Answer one gastrointestinal wellness or bowel-pattern question.',
   'Use the supplied summary only when it is relevant.',
+  'Distinguish movement-event counts from unique bowel-movement days.',
   'Be concise, calm, non-judgmental, and educational.',
   'Do not diagnose, prescribe, recommend medication, give dosage instructions, or make treatment claims.',
   'Do not present the answer as a substitute for a clinician.',
