@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import {
   clearNotificationRecords,
   getEntries,
+  getEntriesByDate,
   getNotificationRecord,
   getNotificationRecords,
   markNotificationRecordCanceled,
@@ -23,7 +24,9 @@ async function getNotifications(): Promise<NotificationsModule | null> {
   }
 
   if (!notificationModulePromise) {
-    notificationModulePromise = import('expo-notifications');
+    notificationModulePromise = Promise.resolve(
+      require('expo-notifications') as NotificationsModule,
+    );
   }
 
   return notificationModulePromise;
@@ -229,10 +232,24 @@ export async function syncNotificationsAfterEntry(
   profile: Profile | null,
   entry: DailyEntry,
 ) {
+  await cancelMissedReminderForDate(entry.localDate);
+
   if (!profile || !profile.remindersEnabled) {
     return;
   }
 
-  await cancelMissedReminderForDate(entry.localDate);
-  await scheduleLoggedNoReminder(profile, entry);
+  const dayEntries = await getEntriesByDate(entry.localDate);
+
+  if (dayEntries.some((dayEntry) => dayEntry.hadBowelMovement)) {
+    await cancelRecord(
+      await getNotificationRecord(entry.localDate, 'logged_no_wellness'),
+    );
+    return;
+  }
+
+  const latestEntry = dayEntries.at(-1);
+
+  if (latestEntry) {
+    await scheduleLoggedNoReminder(profile, latestEntry);
+  }
 }
