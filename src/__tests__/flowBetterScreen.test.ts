@@ -33,14 +33,47 @@ jest.mock('../lib/llmWellnessQuestions', () => ({
   requestLlmWellnessAnswer: jest.fn(),
 }));
 
-import { FlowBetterScreen, HistoryScreen, TodayScreen } from '../../App';
+import App, { FlowBetterScreen, HistoryScreen, TodayScreen } from '../../App';
 import { requestLlmWellnessAnswer } from '../lib/llmWellnessQuestions';
+import {
+  configureNotificationBehavior,
+  rescheduleProfileNotifications,
+  syncNotificationsAfterEntry,
+} from '../services/notifications';
+import {
+  createDailyEntry,
+  getEntries,
+  getProfile,
+  initializeStorage,
+} from '../storage/database';
 import type { DailyEntry, Profile, TrendSummary } from '../types';
 
 const mockRequestLlmWellnessAnswer =
   requestLlmWellnessAnswer as jest.MockedFunction<
     typeof requestLlmWellnessAnswer
   >;
+const mockConfigureNotificationBehavior =
+  configureNotificationBehavior as jest.MockedFunction<
+    typeof configureNotificationBehavior
+  >;
+const mockRescheduleProfileNotifications =
+  rescheduleProfileNotifications as jest.MockedFunction<
+    typeof rescheduleProfileNotifications
+  >;
+const mockSyncNotificationsAfterEntry =
+  syncNotificationsAfterEntry as jest.MockedFunction<
+    typeof syncNotificationsAfterEntry
+  >;
+const mockCreateDailyEntry = createDailyEntry as jest.MockedFunction<
+  typeof createDailyEntry
+>;
+const mockGetEntries = getEntries as jest.MockedFunction<typeof getEntries>;
+const mockGetProfile = getProfile as jest.MockedFunction<typeof getProfile>;
+const mockInitializeStorage = initializeStorage as jest.MockedFunction<
+  typeof initializeStorage
+>;
+const originalConsoleWarn = console.warn.bind(console);
+let consoleWarnSpy: jest.SpyInstance;
 
 const profile: Profile = {
   id: 'local-profile',
@@ -96,6 +129,12 @@ function renderedText(renderer: ReactTestRenderer): string {
   return JSON.stringify(renderer.toJSON());
 }
 
+async function flushMicrotasks() {
+  for (let index = 0; index < 8; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 function dailyEntry(
   id: string,
   checkedInAt: string,
@@ -125,13 +164,20 @@ describe('Flow Better screen', () => {
   beforeAll(() => {
     jest.useFakeTimers();
     jest.setSystemTime(new Date('2026-07-17T16:00:00.000Z'));
+    consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation((...args) => {
+      if (!String(args[0]).includes('SafeAreaView has been deprecated')) {
+        originalConsoleWarn(...args);
+      }
+    });
   });
 
   afterAll(() => {
+    consoleWarnSpy.mockRestore();
     jest.useRealTimers();
   });
 
   beforeEach(() => {
+    jest.clearAllMocks();
     mockRequestLlmWellnessAnswer.mockReset();
   });
 
@@ -210,6 +256,59 @@ describe('Flow Better screen', () => {
         accessibilityLabel: 'Log no for today',
       }).props.accessibilityState.selected,
     ).toBe(false);
+  });
+
+  it('keeps a committed log when reminder synchronization fails', async () => {
+    const savedEntry = dailyEntry(
+      'saved-no',
+      '2026-07-17T16:30:00.000Z',
+      false,
+    );
+    mockInitializeStorage.mockResolvedValue(undefined);
+    mockConfigureNotificationBehavior.mockResolvedValue(undefined);
+    mockGetProfile.mockResolvedValue({
+      ...profile,
+      dailyOpenLoveShownDate: '2026-07-17',
+    });
+    mockGetEntries
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error('Refresh unavailable.'));
+    mockRescheduleProfileNotifications.mockResolvedValue(true);
+    mockCreateDailyEntry.mockResolvedValue(savedEntry);
+    mockSyncNotificationsAfterEntry.mockRejectedValue(
+      new Error('Notifications unavailable.'),
+    );
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(createElement(App));
+      await flushMicrotasks();
+    });
+
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Log no for today',
+      }).props.onPress();
+    });
+
+    await act(async () => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Save log',
+      }).props.onPress();
+      await flushMicrotasks();
+    });
+
+    expect(mockCreateDailyEntry).toHaveBeenCalledTimes(1);
+    expect(mockSyncNotificationsAfterEntry).toHaveBeenCalledTimes(1);
+    expect(
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Log no for today',
+      }).props.accessibilityState.selected,
+    ).toBe(false);
+    expect(renderedText(renderer!)).toContain(
+      'Log saved, but reminders could not be updated.',
+    );
+    expect(renderedText(renderer!)).toContain('1 log · 0 Yes · 1 No');
   });
 
   it('shows every selected-day event with counts and an add action', () => {

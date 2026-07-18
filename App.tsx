@@ -119,6 +119,16 @@ const stoolTypeOptions: { type: StoolType; label: string; detail: string }[] = [
   { type: 7, label: 'Type 7', detail: 'Watery' },
 ];
 
+function withPersistedEntry(
+  entries: DailyEntry[],
+  persistedEntry: DailyEntry,
+): DailyEntry[] {
+  return entries
+    .filter((entry) => entry.id !== persistedEntry.id)
+    .concat(persistedEntry)
+    .sort(compareDailyEntries);
+}
+
 export default function App() {
   const [ready, setReady] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -220,6 +230,23 @@ export default function App() {
     return nextEntries;
   }
 
+  async function refreshEntriesAfterWrite(fallbackEntries: DailyEntry[]) {
+    try {
+      return await refreshEntries();
+    } catch {
+      return fallbackEntries;
+    }
+  }
+
+  async function syncRemindersAfterWrite(task: () => Promise<void>) {
+    try {
+      await task();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function handleProfileCreated(nextProfile: Profile) {
     const savedProfile = await saveProfile(nextProfile);
     setProfile(savedProfile);
@@ -240,13 +267,19 @@ export default function App() {
     }
 
     const entry = await createDailyEntry(today, input);
-    const nextEntries = await refreshEntries();
-    await syncNotificationsAfterEntry(profile, entry);
+    const persistedEntries = withPersistedEntry(entries, entry);
+    setEntries(persistedEntries);
+    const nextEntries = await refreshEntriesAfterWrite(persistedEntries);
+    const remindersSynced = await syncRemindersAfterWrite(() =>
+      syncNotificationsAfterEntry(profile, entry),
+    );
     setNotice(
-      getDailyLogSuccessMessage(nextEntries, {
-        today,
-        loggedAt: new Date(entry.checkedInAt),
-      }),
+      remindersSynced
+        ? getDailyLogSuccessMessage(nextEntries, {
+            today,
+            loggedAt: new Date(entry.checkedInAt),
+          })
+        : 'Log saved, but reminders could not be updated.',
     );
     setNoticeKey((current) => current + 1);
   }
@@ -261,13 +294,23 @@ export default function App() {
     }
 
     const entry = await createDailyEntry(localDate, input);
-    await refreshEntries();
+    const persistedEntries = withPersistedEntry(entries, entry);
+    setEntries(persistedEntries);
+    await refreshEntriesAfterWrite(persistedEntries);
+
+    let remindersSynced = true;
 
     if (localDate === today) {
-      await syncNotificationsAfterEntry(profile, entry);
+      remindersSynced = await syncRemindersAfterWrite(() =>
+        syncNotificationsAfterEntry(profile, entry),
+      );
     }
 
-    setNotice(`Saved ${shortMonthDay(localDate)}.`);
+    setNotice(
+      remindersSynced
+        ? `Saved ${shortMonthDay(localDate)}.`
+        : 'Log saved, but reminders could not be updated.',
+    );
   }
 
   async function handleUpdateEntry(
@@ -275,15 +318,28 @@ export default function App() {
     input: DailyEntryInput,
   ): Promise<DailyEntry | null> {
     const updated = await updateDailyEntry(id, input);
-    await refreshEntries();
 
-    if (updated && profile && updated.localDate === today) {
-      await syncNotificationsAfterEntry(profile, updated);
+    if (!updated) {
+      await refreshEntries();
+      return null;
     }
 
-    if (updated) {
-      setNotice(`Updated ${shortMonthDay(updated.localDate)}.`);
+    const persistedEntries = withPersistedEntry(entries, updated);
+    setEntries(persistedEntries);
+    await refreshEntriesAfterWrite(persistedEntries);
+    let remindersSynced = true;
+
+    if (profile && updated.localDate === today) {
+      remindersSynced = await syncRemindersAfterWrite(() =>
+        syncNotificationsAfterEntry(profile, updated),
+      );
     }
+
+    setNotice(
+      remindersSynced
+        ? `Updated ${shortMonthDay(updated.localDate)}.`
+        : 'Log updated, but reminders could not be updated.',
+    );
 
     return updated;
   }
@@ -291,16 +347,28 @@ export default function App() {
   async function handleDeleteEntry(id: string): Promise<boolean> {
     const deletingEntry = entries.find((entry) => entry.id === id) ?? null;
     const deleted = await deleteDailyEntry(id);
-    await refreshEntries();
 
-    if (deleted) {
-      if (profile && deletingEntry) {
-        await syncNotificationsForDate(profile, deletingEntry.localDate);
-      }
-      setNotice('Log deleted.');
+    if (!deleted) {
+      await refreshEntries();
+      return false;
     }
 
-    return deleted;
+    const persistedEntries = entries.filter((entry) => entry.id !== id);
+    setEntries(persistedEntries);
+    await refreshEntriesAfterWrite(persistedEntries);
+    const remindersSynced =
+      profile && deletingEntry
+        ? await syncRemindersAfterWrite(() =>
+            syncNotificationsForDate(profile, deletingEntry.localDate),
+          )
+        : true;
+    setNotice(
+      remindersSynced
+        ? 'Log deleted.'
+        : 'Log deleted, but reminders could not be updated.',
+    );
+
+    return true;
   }
 
   async function handleSaveSettings(nextProfile: Profile) {
