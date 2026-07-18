@@ -92,6 +92,39 @@ describe('trend helpers', () => {
     expect(today.status).toBe('missed');
   });
 
+  it('keeps every event on a mixed day in chronological order', () => {
+    const firstNo = {
+      ...richEntry('2026-07-05', { hadBowelMovement: false }),
+      id: 'first-no',
+      checkedInAt: '2026-07-05T08:00:00.000Z',
+    };
+    const yes = {
+      ...richEntry('2026-07-05', {
+        hadBowelMovement: true,
+        stoolType: 4,
+      }),
+      id: 'yes-last',
+      checkedInAt: '2026-07-05T18:00:00.000Z',
+    };
+    const secondNo = {
+      ...richEntry('2026-07-05', { hadBowelMovement: false }),
+      id: 'second-no',
+      checkedInAt: '2026-07-05T13:00:00.000Z',
+    };
+
+    const [day] = buildHistoryDays([yes, secondNo, firstNo], {
+      days: 1,
+      today: '2026-07-05',
+    });
+
+    expect(day.status).toBe('mixed');
+    expect(day.entries.map(({ id }) => id)).toEqual([
+      'first-no',
+      'second-no',
+      'yes-last',
+    ]);
+  });
+
   it('summarizes Bristol, symptom, laxative, and note detail metrics', () => {
     const trends = summarizeTrends(
       [

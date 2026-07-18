@@ -61,12 +61,14 @@ export type NotificationRecord = {
   createdAt: string;
 };
 
-export type HistoryStatus = 'yes' | 'no' | 'missed' | 'pending';
+export type HistoryStatus = 'yes' | 'no' | 'mixed' | 'missed' | 'pending';
 
 export type HistoryDay = {
   localDate: string;
   label: string;
   status: HistoryStatus;
+  entries: DailyEntry[];
+  /** @deprecated Use entries while the screen migration is in progress. */
   entry: DailyEntry | null;
 };
 

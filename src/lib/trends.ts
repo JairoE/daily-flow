@@ -18,10 +18,7 @@ import {
   getRecentDateKeys,
   parseLocalDateKey,
 } from './dates';
-
-function entryMap(entries: DailyEntry[]): Map<string, DailyEntry> {
-  return new Map(entries.map((entry) => [entry.localDate, entry]));
-}
+import { groupEntriesByDate, summarizeEntryDay } from './dailyEntries';
 
 const stoolTypes: StoolType[] = [1, 2, 3, 4, 5, 6, 7];
 
@@ -33,7 +30,7 @@ const emptySymptomCounts: SymptomCounts = {
 };
 
 function isAnswered(day: HistoryDay): boolean {
-  return day.status === 'yes' || day.status === 'no';
+  return day.status === 'yes' || day.status === 'no' || day.status === 'mixed';
 }
 
 function isNonPending(day: HistoryDay): boolean {
@@ -70,7 +67,7 @@ function summarizeGaps(chronologicalDays: HistoryDay[]) {
       continue;
     }
 
-    if (day.status === 'yes') {
+    if (day.status === 'yes' || day.status === 'mixed') {
       if (seenYes && currentRun >= 2) {
         gapCount2Plus += 1;
       }
@@ -121,7 +118,9 @@ function buildWeeklyFrequency(
       label: `${formatShortDate(firstDay.localDate)}-${formatShortDate(lastDay.localDate)}`,
       startDate: firstDay.localDate,
       endDate: lastDay.localDate,
-      count: weekDays.filter((day) => day.status === 'yes').length,
+      count: weekDays.filter(
+        (day) => day.status === 'yes' || day.status === 'mixed',
+      ).length,
     });
   }
 
@@ -135,7 +134,9 @@ function buildRolling7(chronologicalDays: HistoryDay[]): RollingFrequencyPoint[]
     return {
       localDate: day.localDate,
       label: day.label,
-      count: windowDays.filter((item) => item.status === 'yes').length,
+      count: windowDays.filter(
+        (item) => item.status === 'yes' || item.status === 'mixed',
+      ).length,
     };
   });
 }
@@ -145,7 +146,7 @@ function buildIntervals(chronologicalDays: HistoryDay[]): IntervalPoint[] {
   const intervals: IntervalPoint[] = [];
 
   for (const day of chronologicalDays) {
-    if (day.status !== 'yes') {
+    if (day.status !== 'yes' && day.status !== 'mixed') {
       continue;
     }
 
@@ -192,29 +193,21 @@ export function buildHistoryDays(
 ): HistoryDay[] {
   const days = options.days ?? 30;
   const today = options.today ?? getLocalDateKey();
-  const byDate = entryMap(entries);
+  const byDate = groupEntriesByDate(entries);
 
   return getRecentDateKeys(days, today)
     .reverse()
     .map((localDate) => {
-      const entry = byDate.get(localDate) ?? null;
-      const isToday = localDate === today;
-
-      if (entry) {
-        return {
-          localDate,
-          label: formatFriendlyDate(localDate, today),
-          status: entry.hadBowelMovement ? 'yes' : 'no',
-          entry,
-        };
-      }
-
+      const summary = summarizeEntryDay(localDate, byDate.get(localDate) ?? [], {
+        today,
+        includeTodayAsMissed: options.includeTodayAsMissed,
+      });
       return {
         localDate,
         label: formatFriendlyDate(localDate, today),
-        status:
-          isToday && !options.includeTodayAsMissed ? 'pending' : 'missed',
-        entry: null,
+        status: summary.status,
+        entries: summary.entries,
+        entry: summary.entries.at(-1) ?? null,
       };
     });
 }
@@ -232,33 +225,23 @@ export function buildMonthHistoryDays(
     new Date(currentDate.getFullYear(), currentDate.getMonth(), 1),
   );
   const gridStart = addDays(monthStart, -parseLocalDateKey(monthStart).getDay());
-  const byDate = entryMap(entries);
+  const byDate = groupEntriesByDate(entries);
 
   return Array.from({ length: 42 }, (_, index) => {
     const localDate = addDays(gridStart, index);
-    const entry = byDate.get(localDate) ?? null;
-    const isToday = localDate === today;
+    const summary = summarizeEntryDay(localDate, byDate.get(localDate) ?? [], {
+      today,
+      includeTodayAsMissed: options.includeTodayAsMissed,
+    });
     const isCurrentMonth =
       parseLocalDateKey(localDate).getMonth() === currentDate.getMonth();
-
-    if (entry) {
-      return {
-        localDate,
-        label: formatFriendlyDate(localDate, today),
-        status: entry.hadBowelMovement ? 'yes' : 'no',
-        entry,
-        isCurrentMonth,
-      };
-    }
 
     return {
       localDate,
       label: formatFriendlyDate(localDate, today),
-      status:
-        localDate > today || (isToday && !options.includeTodayAsMissed)
-          ? 'pending'
-          : 'missed',
-      entry: null,
+      status: summary.status,
+      entries: summary.entries,
+      entry: summary.entries.at(-1) ?? null,
       isCurrentMonth,
     };
   });
@@ -303,10 +286,14 @@ export function summarizeTrends(
     emptySymptomCounts,
   );
   const gapSummary = summarizeGaps(chronological30);
-  const yesLast30 = history30.filter((day) => day.status === 'yes').length;
+  const yesLast30 = history30.filter(
+    (day) => day.status === 'yes' || day.status === 'mixed',
+  ).length;
 
   return {
-    yesLast7: history7.filter((day) => day.status === 'yes').length,
+    yesLast7: history7.filter(
+      (day) => day.status === 'yes' || day.status === 'mixed',
+    ).length,
     yesLast30,
     missedLast7: history7.filter((day) => day.status === 'missed').length,
     missedLast30: history30.filter((day) => day.status === 'missed').length,
