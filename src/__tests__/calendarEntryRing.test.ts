@@ -1,6 +1,6 @@
 import { createElement } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { Circle } from 'react-native-svg';
+import { Circle, G, Svg } from 'react-native-svg';
 
 import { CalendarEntryRing } from '../components/CalendarEntryRing';
 import {
@@ -59,5 +59,17 @@ describe('CalendarEntryRing', () => {
       CALENDAR_YES_COLOR,
     ]);
     expect(circles.every((circle) => circle.props.fill === 'none')).toBe(true);
+
+    const svg = renderer!.root.findByType(Svg);
+    expect(svg.props['aria-hidden']).toBe(true);
+    expect(svg.props.style).toEqual({ pointerEvents: 'none' });
+    expect(svg.props).not.toHaveProperty('accessibilityElementsHidden');
+    expect(svg.props).not.toHaveProperty('importantForAccessibility');
+
+    const groups = renderer!.root.findAllByType(G);
+    const ringGroup = groups.find((group) => group.props.transform != null);
+    expect(ringGroup?.props.transform).toBe('rotate(-90 21 21)');
+    expect(ringGroup?.props).not.toHaveProperty('origin');
+    expect(ringGroup?.props).not.toHaveProperty('rotation');
   });
 });

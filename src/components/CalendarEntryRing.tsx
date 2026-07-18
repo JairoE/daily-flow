@@ -18,14 +18,13 @@ export function CalendarEntryRing({ entries }: { entries: DailyEntry[] }) {
 
   return (
     <Svg
-      accessibilityElementsHidden
+      aria-hidden
       height={ringSize}
-      importantForAccessibility="no-hide-descendants"
-      pointerEvents="none"
+      style={{ pointerEvents: 'none' }}
       viewBox={`0 0 ${ringSize} ${ringSize}`}
       width={ringSize}
     >
-      <G origin={`${ringCenter}, ${ringCenter}`} rotation={-90}>
+      <G transform={`rotate(-90 ${ringCenter} ${ringCenter})`}>
         {segments.map((segment) => (
           <Circle
             key={segment.entryId}
