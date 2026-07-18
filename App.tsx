@@ -53,8 +53,10 @@ import {
 } from './src/lib/dailyLogFeedback';
 import {
   compareDailyEntries,
+  formatEntryDayAccessibility,
   groupEntriesByDate,
 } from './src/lib/dailyEntries';
+import { CalendarEntryRing } from './src/components/CalendarEntryRing';
 import {
   getDailyOpenLoveNotice,
   isDailyOpenLoveNoticeMessage,
@@ -1490,7 +1492,7 @@ function MonthCalendarCard({
   );
 }
 
-function CalendarDayButton({
+export function CalendarDayButton({
   day,
   selected,
   onPress,
@@ -1499,11 +1501,24 @@ function CalendarDayButton({
   selected: boolean;
   onPress: () => void;
 }) {
-  const answered = day.status === 'yes' || day.status === 'no';
+  const yesCount = day.entries.filter((entry) => entry.hadBowelMovement).length;
+  const noCount = day.entries.length - yesCount;
+  const accessibilityLabel = formatEntryDayAccessibility(
+    {
+      localDate: day.localDate,
+      entries: day.entries,
+      status: day.status,
+      yesCount,
+      noCount,
+      totalCount: day.entries.length,
+      hasBowelMovement: yesCount > 0,
+    },
+    day.label,
+  );
 
   return (
     <Pressable
-      accessibilityLabel={`${day.label}, ${statusText(day.status)}${
+      accessibilityLabel={`${accessibilityLabel}${
         day.isCurrentMonth ? '' : ', outside current month'
       }`}
       accessibilityRole="button"
@@ -1518,19 +1533,12 @@ function CalendarDayButton({
         style={[
           styles.calendarDayBubble,
           !day.isCurrentMonth && styles.calendarDayBubbleOutside,
-          answered && styles.calendarDayBubbleLogged,
-          day.status === 'no' && styles.calendarDayBubbleNo,
-          selected && styles.calendarDayBubbleSelected,
         ]}
       >
-        {answered ? (
-          <View
-            style={[
-              styles.calendarLoggedAccent,
-              day.status === 'no' && styles.calendarLoggedAccentNo,
-            ]}
-          />
-        ) : null}
+        {selected ? <View style={styles.calendarDaySelection} /> : null}
+        <View style={styles.calendarDayRing}>
+          <CalendarEntryRing entries={day.entries} />
+        </View>
         <Text
           style={[
             styles.calendarDayText,
@@ -3004,9 +3012,7 @@ const styles = StyleSheet.create({
   },
   calendarDayBubble: {
     alignItems: 'center',
-    borderColor: 'transparent',
     borderRadius: 999,
-    borderWidth: 4,
     height: 42,
     justifyContent: 'center',
     position: 'relative',
@@ -3015,33 +3021,23 @@ const styles = StyleSheet.create({
   calendarDayBubbleOutside: {
     opacity: 0.42,
   },
-  calendarDayBubbleLogged: {
-    borderColor: palette.purpleSoft,
-  },
-  calendarDayBubbleNo: {
-    borderColor: '#FFB8BE',
-  },
-  calendarDayBubbleSelected: {
+  calendarDaySelection: {
     backgroundColor: palette.purpleFaint,
-  },
-  calendarLoggedAccent: {
-    backgroundColor: palette.purple,
     borderRadius: 999,
-    height: 18,
+    height: 34,
     position: 'absolute',
-    right: 1,
-    top: -2,
-    transform: [{ rotate: '-28deg' }],
-    width: 7,
+    width: 34,
   },
-  calendarLoggedAccentNo: {
-    backgroundColor: palette.coral,
+  calendarDayRing: {
+    position: 'absolute',
+    zIndex: 1,
   },
   calendarDayText: {
     color: palette.ink,
     fontSize: 14,
     fontWeight: '800',
     fontVariant: ['tabular-nums'],
+    zIndex: 2,
   },
   calendarDayTextOutside: {
     color: palette.softText,
