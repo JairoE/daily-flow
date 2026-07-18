@@ -140,7 +140,7 @@ git commit -m "fix: migrate daily entries atomically"
 
 - [ ] **Step 1: Write failing notification tests**
 
-Add tests proving a historical No-only day does not schedule, and deleting today's final event schedules the still-upcoming missed reminder rather than a logged-No reminder.
+Add tests proving a historical No-only day does not schedule, deleting today's final event schedules the still-upcoming missed reminder rather than a logged-No reminder, and overlapping reconciliation for one date is serialized.
 
 - [ ] **Step 2: Run the focused suite and verify RED**
 
@@ -150,7 +150,7 @@ Expected: FAIL because historical reconciliation schedules relative to now and e
 
 - [ ] **Step 3: Implement date-aware reconciliation**
 
-Cancel stale logged-No records for non-today dates. For empty today, cancel logged-No and schedule the single future missed target when reminders are enabled and no scheduled missed record already exists. For non-empty today, cancel missed and preserve the existing Yes/No aggregate behavior.
+Cancel stale logged-No records for non-today dates. For empty today, cancel logged-No and schedule the single future missed target when reminders are enabled and no scheduled missed record already exists. For non-empty today, cancel missed and preserve the existing Yes/No aggregate behavior. Queue the complete read/cancel/schedule/upsert reconciliation per local date.
 
 - [ ] **Step 4: Verify GREEN and commit**
 
@@ -183,7 +183,7 @@ Expected: FAIL because notification rejection currently rejects `TodayScreen.onL
 
 - [ ] **Step 3: Implement the persistence boundary**
 
-After create/update/delete returns, mutate `entries` from the committed result. Catch refresh failures without rejecting the form. Catch notification reconciliation failures separately and show `Log saved, but reminders could not be updated.` (or the matching update/delete copy). Keep persistence errors rejectable.
+After create/update/delete returns, mutate `entries` from the committed result with functional state updates so overlapping writes compose. Catch refresh failures without rejecting the form. Catch notification reconciliation failures separately and show `Log saved, but reminders could not be updated.` (or the matching update/delete copy). Keep persistence errors rejectable.
 
 - [ ] **Step 4: Verify GREEN and commit**
 

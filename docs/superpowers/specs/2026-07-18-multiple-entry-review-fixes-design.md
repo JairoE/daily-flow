@@ -12,11 +12,11 @@ Resolve the five blocking review findings on the multiple-daily-entry branch wit
 
 An entry create, update, or delete is successful once local persistence succeeds. Refreshing derived UI state and synchronizing notifications are post-persistence work. Failures in that work must not reject the form as though the write failed, because retrying a successful create appends a duplicate event.
 
-After a committed write, the app will update its in-memory entries immediately, attempt a storage refresh, and attempt notification reconciliation. A notification failure will keep the saved state and show a reminder-specific warning. A persistence failure will continue to reject the form and preserve its input.
+After a committed write, the app will update its in-memory entries immediately with a functional state mutation, attempt a storage refresh, and attempt notification reconciliation. Functional mutations preserve overlapping committed writes when refresh fails. A notification failure will keep the saved state and show a reminder-specific warning. A persistence failure will continue to reject the form and preserve its input.
 
 ### Notification reconciliation is date-aware
 
-Only today's entry state may create a new logged-No or missed-check-in notification. Reconciliation for historical dates may cancel stale logged-No records but must never schedule a new notification.
+Only today's entry state may create a new logged-No or missed-check-in notification. Reconciliation for historical dates may cancel stale logged-No records but must never schedule a new notification. Reconciliation is serialized per local date so overlapping mutations cannot create orphan notifications or leave the database pointing at an older scheduled notification.
 
 For today:
 
@@ -35,7 +35,7 @@ When the legacy unique-date table is detected, missing daily-entry columns and t
 
 ### Tests control time
 
-History screen tests will freeze the clock to 2026-07-17 so the selected-yesterday default remains deterministic. Notification tests will also control time when asserting today-versus-history behavior.
+History screen tests will freeze the local wall clock to 2026-07-17 so the selected-yesterday default remains deterministic in every timezone. Notification tests will also control local time and assert local trigger components rather than an Eastern-specific UTC timestamp.
 
 ## Scope boundaries
 
