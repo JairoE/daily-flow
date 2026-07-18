@@ -268,7 +268,7 @@ export default function App() {
 
     const entry = await createDailyEntry(today, input);
     const persistedEntries = withPersistedEntry(entries, entry);
-    setEntries(persistedEntries);
+    setEntries((current) => withPersistedEntry(current, entry));
     const nextEntries = await refreshEntriesAfterWrite(persistedEntries);
     const remindersSynced = await syncRemindersAfterWrite(() =>
       syncNotificationsAfterEntry(profile, entry),
@@ -295,7 +295,7 @@ export default function App() {
 
     const entry = await createDailyEntry(localDate, input);
     const persistedEntries = withPersistedEntry(entries, entry);
-    setEntries(persistedEntries);
+    setEntries((current) => withPersistedEntry(current, entry));
     await refreshEntriesAfterWrite(persistedEntries);
 
     let remindersSynced = true;
@@ -325,7 +325,7 @@ export default function App() {
     }
 
     const persistedEntries = withPersistedEntry(entries, updated);
-    setEntries(persistedEntries);
+    setEntries((current) => withPersistedEntry(current, updated));
     await refreshEntriesAfterWrite(persistedEntries);
     let remindersSynced = true;
 
@@ -354,7 +354,7 @@ export default function App() {
     }
 
     const persistedEntries = entries.filter((entry) => entry.id !== id);
-    setEntries(persistedEntries);
+    setEntries((current) => current.filter((entry) => entry.id !== id));
     await refreshEntriesAfterWrite(persistedEntries);
     const remindersSynced =
       profile && deletingEntry

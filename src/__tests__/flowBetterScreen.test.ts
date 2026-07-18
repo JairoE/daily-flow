@@ -179,6 +179,13 @@ describe('Flow Better screen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockRequestLlmWellnessAnswer.mockReset();
+    mockConfigureNotificationBehavior.mockReset();
+    mockRescheduleProfileNotifications.mockReset();
+    mockSyncNotificationsAfterEntry.mockReset();
+    mockCreateDailyEntry.mockReset();
+    mockGetEntries.mockReset();
+    mockGetProfile.mockReset();
+    mockInitializeStorage.mockReset();
   });
 
   it('keeps the Today screen focused on daily logging', () => {
@@ -309,6 +316,60 @@ describe('Flow Better screen', () => {
       'Log saved, but reminders could not be updated.',
     );
     expect(renderedText(renderer!)).toContain('1 log · 0 Yes · 1 No');
+  });
+
+  it('preserves overlapping committed logs when refresh fails', async () => {
+    const firstEntry = dailyEntry(
+      'first-no',
+      '2026-07-17T16:30:00.000Z',
+      false,
+    );
+    const secondEntry = dailyEntry(
+      'second-no',
+      '2026-07-17T16:31:00.000Z',
+      false,
+    );
+    mockInitializeStorage.mockResolvedValue(undefined);
+    mockConfigureNotificationBehavior.mockResolvedValue(undefined);
+    mockGetProfile.mockResolvedValue({
+      ...profile,
+      dailyOpenLoveShownDate: '2026-07-17',
+    });
+    mockGetEntries
+      .mockResolvedValueOnce([])
+      .mockRejectedValue(new Error('Refresh unavailable.'));
+    mockRescheduleProfileNotifications.mockResolvedValue(true);
+    mockCreateDailyEntry
+      .mockResolvedValueOnce(firstEntry)
+      .mockResolvedValueOnce(secondEntry);
+    mockSyncNotificationsAfterEntry.mockRejectedValue(
+      new Error('Notifications unavailable.'),
+    );
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(createElement(App));
+      await flushMicrotasks();
+    });
+
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Log no for today',
+      }).props.onPress();
+    });
+
+    const saveButton = renderer!.root.findByProps({
+      accessibilityLabel: 'Save log',
+    });
+
+    await act(async () => {
+      saveButton.props.onPress();
+      saveButton.props.onPress();
+      await flushMicrotasks();
+    });
+
+    expect(mockCreateDailyEntry).toHaveBeenCalledTimes(2);
+    expect(renderedText(renderer!)).toContain('2 logs · 0 Yes · 2 No');
   });
 
   it('shows every selected-day event with counts and an add action', () => {
