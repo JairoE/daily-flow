@@ -10,6 +10,7 @@ import {
   upsertNotificationRecord,
 } from '../storage/database';
 import type { DailyEntry, NotificationRecord, NotificationType, Profile } from '../types';
+import { getLocalDateKey } from '../lib/dates';
 import { getLoggedNoReminderDate, getReminderCopy, getUpcomingMissedReminderTargets } from '../lib/reminders';
 import { getDailyTriggerParts } from '../lib/reminders';
 
@@ -145,6 +146,53 @@ export async function scheduleLoggedNoReminder(profile: Profile, entry: DailyEnt
   );
 }
 
+async function restoreMissedReminderForDate(
+  profile: Profile,
+  localDate: string,
+  now: Date,
+) {
+  const Notifications = await getNotifications();
+
+  if (!Notifications || !profile.remindersEnabled) {
+    return;
+  }
+
+  const target = getUpcomingMissedReminderTargets(profile, {
+    from: now,
+    days: 1,
+  }).find((candidate) => candidate.localDate === localDate);
+
+  if (!target) {
+    return;
+  }
+
+  const existingRecord = await getNotificationRecord(
+    localDate,
+    'missed_checkin',
+  );
+
+  if (existingRecord?.status === 'scheduled') {
+    return;
+  }
+
+  const copy = getReminderCopy('missed_checkin', profile.privateNotifications);
+  const notificationId = await Notifications.scheduleNotificationAsync({
+    content: {
+      title: copy.title,
+      body: copy.body,
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      date: target.fireDate,
+      channelId: 'daily-flow-reminders',
+    },
+  });
+
+  await upsertNotificationRecord(
+    buildRecord(localDate, 'missed_checkin', notificationId),
+  );
+}
+
 export async function rescheduleProfileNotifications(profile: Profile): Promise<boolean> {
   const Notifications = await getNotifications();
 
@@ -244,17 +292,29 @@ export async function syncNotificationsAfterEntry(
 export async function syncNotificationsForDate(
   profile: Profile,
   localDate: string,
+  now = new Date(),
 ) {
-  const dayEntries = await getEntriesByDate(localDate);
   const loggedNoRecord = await getNotificationRecord(
     localDate,
     'logged_no_wellness',
   );
 
-  if (
-    dayEntries.length === 0 ||
-    dayEntries.some((dayEntry) => dayEntry.hadBowelMovement)
-  ) {
+  if (localDate !== getLocalDateKey(now) || !profile.remindersEnabled) {
+    await cancelRecord(loggedNoRecord);
+    return;
+  }
+
+  const dayEntries = await getEntriesByDate(localDate);
+
+  if (dayEntries.length === 0) {
+    await cancelRecord(loggedNoRecord);
+    await restoreMissedReminderForDate(profile, localDate, now);
+    return;
+  }
+
+  await cancelMissedReminderForDate(localDate);
+
+  if (dayEntries.some((dayEntry) => dayEntry.hadBowelMovement)) {
     await cancelRecord(loggedNoRecord);
     return;
   }

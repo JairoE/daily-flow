@@ -33,6 +33,7 @@ const mockScheduleNotificationAsync =
   notificationMocks.scheduleNotificationAsync;
 const mockCancelScheduledNotificationAsync =
   notificationMocks.cancelScheduledNotificationAsync;
+const mockUpsertNotificationRecord = storageMocks.upsertNotificationRecord;
 
 import {
   syncNotificationsAfterEntry,
@@ -77,23 +78,37 @@ function entry(id: string, hadBowelMovement: boolean): DailyEntry {
   };
 }
 
-function record(type: NotificationType) {
+function record(
+  type: NotificationType,
+  localDate = '2026-07-17',
+  status: 'scheduled' | 'canceled' = 'scheduled',
+) {
   return {
-    id: `${type}-2026-07-17`,
-    localDate: '2026-07-17',
+    id: `${type}-${localDate}`,
+    localDate,
     type,
     notificationId: `${type}-notification`,
-    status: 'scheduled' as const,
+    status,
     createdAt: '2026-07-17T12:00:00.000Z',
   };
 }
 
 describe('multi-entry notification synchronization', () => {
+  beforeAll(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-17T16:00:00.000Z'));
+  });
+
+  afterAll(() => {
+    jest.useRealTimers();
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     mockScheduleNotificationAsync.mockResolvedValue('new-logged-no');
     mockGetNotificationRecord.mockImplementation(
-      async (_localDate: string, type: NotificationType) => record(type),
+      async (localDate: string, type: NotificationType) =>
+        record(type, localDate),
     );
   });
 
@@ -129,14 +144,44 @@ describe('multi-entry notification synchronization', () => {
     expect(mockGetEntriesByDate).not.toHaveBeenCalled();
   });
 
-  it('cancels a logged-No reminder after the final event is deleted', async () => {
+  it('does not schedule a logged-No reminder for a historical date', async () => {
+    await syncNotificationsForDate(profile, '2026-07-16');
+
+    expect(mockCancelScheduledNotificationAsync).toHaveBeenCalledWith(
+      'logged_no_wellness-notification',
+    );
+    expect(mockGetEntriesByDate).not.toHaveBeenCalled();
+    expect(mockScheduleNotificationAsync).not.toHaveBeenCalled();
+  });
+
+  it('restores an upcoming missed reminder after todays final event is deleted', async () => {
     mockGetEntriesByDate.mockResolvedValueOnce([]);
+    mockGetNotificationRecord.mockImplementation(
+      async (localDate: string, type: NotificationType) =>
+        record(
+          type,
+          localDate,
+          type === 'missed_checkin' ? 'canceled' : 'scheduled',
+        ),
+    );
 
     await syncNotificationsForDate(profile, '2026-07-17');
 
     expect(mockCancelScheduledNotificationAsync).toHaveBeenCalledWith(
       'logged_no_wellness-notification',
     );
-    expect(mockScheduleNotificationAsync).not.toHaveBeenCalled();
+    expect(mockUpsertNotificationRecord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localDate: '2026-07-17',
+        type: 'missed_checkin',
+      }),
+    );
+    expect(mockScheduleNotificationAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: expect.objectContaining({
+          date: new Date('2026-07-18T02:00:00.000Z'),
+        }),
+      }),
+    );
   });
 });
