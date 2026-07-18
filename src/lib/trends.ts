@@ -118,9 +118,11 @@ function buildWeeklyFrequency(
       label: `${formatShortDate(firstDay.localDate)}-${formatShortDate(lastDay.localDate)}`,
       startDate: firstDay.localDate,
       endDate: lastDay.localDate,
-      count: weekDays.filter(
-        (day) => day.status === 'yes' || day.status === 'mixed',
-      ).length,
+      count: weekDays.reduce(
+        (count, day) =>
+          count + day.entries.filter((entry) => entry.hadBowelMovement).length,
+        0,
+      ),
     });
   }
 
@@ -134,9 +136,11 @@ function buildRolling7(chronologicalDays: HistoryDay[]): RollingFrequencyPoint[]
     return {
       localDate: day.localDate,
       label: day.label,
-      count: windowDays.filter(
-        (item) => item.status === 'yes' || item.status === 'mixed',
-      ).length,
+      count: windowDays.reduce(
+        (count, item) =>
+          count + item.entries.filter((entry) => entry.hadBowelMovement).length,
+        0,
+      ),
     };
   });
 }
@@ -146,18 +150,20 @@ function buildIntervals(chronologicalDays: HistoryDay[]): IntervalPoint[] {
   const intervals: IntervalPoint[] = [];
 
   for (const day of chronologicalDays) {
-    if (day.status !== 'yes' && day.status !== 'mixed') {
-      continue;
-    }
+    for (const entry of day.entries) {
+      if (!entry.hadBowelMovement) {
+        continue;
+      }
 
-    intervals.push({
-      localDate: day.localDate,
-      label: day.label,
-      daysSincePrevious: previousYesDate
-        ? daysBetween(previousYesDate, day.localDate)
-        : null,
-    });
-    previousYesDate = day.localDate;
+      intervals.push({
+        localDate: day.localDate,
+        label: day.label,
+        daysSincePrevious: previousYesDate
+          ? daysBetween(previousYesDate, day.localDate)
+          : null,
+      });
+      previousYesDate = day.localDate;
+    }
   }
 
   return intervals;
@@ -270,9 +276,11 @@ export function summarizeTrends(
   const nonPendingLast7 = history7.filter(isNonPending).length;
   const answeredLast30 = history30.filter(isAnswered).length;
   const nonPendingLast30 = history30.filter(isNonPending).length;
-  const detailEntries = chronological30
-    .map((day) => day.entry)
-    .filter((entry): entry is DailyEntry => entry?.detailsRecorded === true);
+  const windowEntries = chronological30.flatMap((day) => day.entries);
+  const detailEntries = windowEntries.filter((entry) => entry.detailsRecorded);
+  const bowelMovementCountLast30 = windowEntries.filter(
+    (entry) => entry.hadBowelMovement,
+  ).length;
   const bristolDistribution = buildBristolDistribution(detailEntries);
   const symptomCounts = detailEntries.reduce<SymptomCounts>(
     (counts, entry) => ({
@@ -289,6 +297,34 @@ export function summarizeTrends(
   const yesLast30 = history30.filter(
     (day) => day.status === 'yes' || day.status === 'mixed',
   ).length;
+  const averageBowelMovementsPerWeekLast30 = roundedOneDecimal(
+    (bowelMovementCountLast30 / 30) * 7,
+  );
+  const hardOrLumpyMovementsLast30 = detailEntries.filter(
+    (entry) =>
+      entry.hadBowelMovement &&
+      entry.stoolType !== null &&
+      entry.stoolType <= 2,
+  ).length;
+  const looseOrWateryMovementsLast30 = detailEntries.filter(
+    (entry) =>
+      entry.hadBowelMovement &&
+      entry.stoolType !== null &&
+      entry.stoolType >= 6,
+  ).length;
+  const symptomBurdenEntriesLast30 = detailEntries.filter(
+    (entry) =>
+      entry.symptoms.straining ||
+      entry.symptoms.pain ||
+      entry.symptoms.bloating ||
+      entry.symptoms.incompleteEvacuation,
+  ).length;
+  const laxativeUseEntriesLast30 = detailEntries.filter(
+    (entry) => entry.laxativeUsed,
+  ).length;
+  const noteEntriesLast30 = detailEntries.filter((entry) =>
+    Boolean(entry.laxativeNote.trim()),
+  ).length;
 
   return {
     yesLast7: history7.filter(
@@ -299,8 +335,10 @@ export function summarizeTrends(
     missedLast30: history30.filter((day) => day.status === 'missed').length,
     daysSinceLastYes: lastYes ? daysBetween(lastYes, today) : null,
     checkInRateLast7: percent(answeredLast7, nonPendingLast7),
+    bowelMovementCountLast30,
     bowelMovementDaysLast30: yesLast30,
-    averagePerWeekLast30: roundedOneDecimal((yesLast30 / 30) * 7),
+    averageBowelMovementsPerWeekLast30,
+    averagePerWeekLast30: averageBowelMovementsPerWeekLast30,
     currentGapDays: lastYes ? daysBetween(lastYes, today) : null,
     longestGapDays: gapSummary.longestGapDays,
     gapCount2Plus: gapSummary.gapCount2Plus,
@@ -308,28 +346,18 @@ export function summarizeTrends(
     checkInRateLast30: percent(answeredLast30, nonPendingLast30),
     bristolDistribution,
     mostCommonBristolType: findMostCommonBristolType(bristolDistribution),
-    hardOrLumpyDays: detailEntries.filter(
-      (entry) =>
-        entry.hadBowelMovement &&
-        entry.stoolType !== null &&
-        entry.stoolType <= 2,
-    ).length,
-    looseOrWateryDays: detailEntries.filter(
-      (entry) =>
-        entry.hadBowelMovement &&
-        entry.stoolType !== null &&
-        entry.stoolType >= 6,
-    ).length,
+    hardOrLumpyMovementsLast30,
+    looseOrWateryMovementsLast30,
+    hardOrLumpyDays: hardOrLumpyMovementsLast30,
+    looseOrWateryDays: looseOrWateryMovementsLast30,
     symptomCounts,
-    symptomBurdenDays: detailEntries.filter(
-      (entry) =>
-        entry.symptoms.straining ||
-        entry.symptoms.pain ||
-        entry.symptoms.bloating ||
-        entry.symptoms.incompleteEvacuation,
-    ).length,
-    laxativeUseDays: detailEntries.filter((entry) => entry.laxativeUsed).length,
-    noteDays: detailEntries.filter((entry) => entry.laxativeNote.trim()).length,
+    symptomBurdenEntriesLast30,
+    laxativeUseEntriesLast30,
+    noteEntriesLast30,
+    detailEntriesLast30: detailEntries.length,
+    symptomBurdenDays: symptomBurdenEntriesLast30,
+    laxativeUseDays: laxativeUseEntriesLast30,
+    noteDays: noteEntriesLast30,
     detailDays: detailEntries.length,
     weeklyFrequency: buildWeeklyFrequency(chronological30),
     rolling7: buildRolling7(chronological30),

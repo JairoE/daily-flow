@@ -1,4 +1,5 @@
 import type { DailyEntry } from '../types';
+import { compareDailyEntries } from './dailyEntries';
 
 const csvSchemaVersion = '1';
 
@@ -55,8 +56,8 @@ function entryToRow(entry: DailyEntry): string[] {
 }
 
 export function buildDailyEntriesCsv(entries: DailyEntry[]): string {
-  const sortedEntries = [...entries].sort((a, b) =>
-    a.localDate.localeCompare(b.localDate),
+  const sortedEntries = [...entries].sort(
+    (a, b) => a.localDate.localeCompare(b.localDate) || compareDailyEntries(a, b),
   );
   const rows = [
     dailyEntriesCsvHeaders,

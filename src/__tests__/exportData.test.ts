@@ -64,6 +64,33 @@ describe('export data helpers', () => {
     );
   });
 
+  it('exports every same-date event in stable time and id order', () => {
+    const csv = buildDailyEntriesCsv([
+      entry({
+        id: 'late',
+        localDate: '2026-07-05',
+        checkedInAt: '2026-07-05T18:00:00.000Z',
+      }),
+      entry({
+        id: 'tie-b',
+        localDate: '2026-07-05',
+        checkedInAt: '2026-07-05T08:00:00.000Z',
+      }),
+      entry({
+        id: 'tie-a',
+        localDate: '2026-07-05',
+        checkedInAt: '2026-07-05T08:00:00.000Z',
+      }),
+    ]);
+
+    expect(
+      csv
+        .split('\n')
+        .slice(1)
+        .map((row) => row.split(',')[1]),
+    ).toEqual(['tie-a', 'tie-b', 'late']);
+  });
+
   it('builds a dated csv filename', () => {
     expect(buildDailyEntriesExportFilename('2026-07-12')).toBe(
       'daily-flow-entries-2026-07-12.csv',

@@ -114,7 +114,10 @@ export type TrendSummary = {
   missedLast30: number;
   daysSinceLastYes: number | null;
   checkInRateLast7: number;
+  bowelMovementCountLast30: number;
   bowelMovementDaysLast30: number;
+  averageBowelMovementsPerWeekLast30: number;
+  /** @deprecated Use averageBowelMovementsPerWeekLast30. */
   averagePerWeekLast30: number;
   currentGapDays: number | null;
   longestGapDays: number;
@@ -123,12 +126,24 @@ export type TrendSummary = {
   checkInRateLast30: number;
   bristolDistribution: BristolDistributionItem[];
   mostCommonBristolType: StoolType | null;
+  hardOrLumpyMovementsLast30: number;
+  looseOrWateryMovementsLast30: number;
+  /** @deprecated Use hardOrLumpyMovementsLast30. */
   hardOrLumpyDays: number;
+  /** @deprecated Use looseOrWateryMovementsLast30. */
   looseOrWateryDays: number;
   symptomCounts: SymptomCounts;
+  symptomBurdenEntriesLast30: number;
+  laxativeUseEntriesLast30: number;
+  noteEntriesLast30: number;
+  detailEntriesLast30: number;
+  /** @deprecated Use symptomBurdenEntriesLast30. */
   symptomBurdenDays: number;
+  /** @deprecated Use laxativeUseEntriesLast30. */
   laxativeUseDays: number;
+  /** @deprecated Use noteEntriesLast30. */
   noteDays: number;
+  /** @deprecated Use detailEntriesLast30. */
   detailDays: number;
   weeklyFrequency: WeeklyFrequencyPoint[];
   rolling7: RollingFrequencyPoint[];

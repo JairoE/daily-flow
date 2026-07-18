@@ -1540,9 +1540,9 @@ function TrendsScreen({
             tone="blue"
           />
           <SummaryMetric
-            label="Average"
-            value={`${trends.averagePerWeekLast30}`}
-            detail="per week"
+            label="Average BMs"
+            value={`${trends.averageBowelMovementsPerWeekLast30}`}
+            detail="movements per week"
             tone="teal"
           />
           <SummaryMetric
@@ -1560,9 +1560,9 @@ function TrendsScreen({
             tone="slate"
           />
           <SummaryMetric
-            label="Symptoms"
-            value={`${trends.symptomBurdenDays}`}
-            detail="days with any"
+            label="Symptom logs"
+            value={`${trends.symptomBurdenEntriesLast30}`}
+            detail="entries with any"
             tone="coral"
           />
         </View>
@@ -1890,7 +1890,7 @@ function SymptomBurdenChart({ trends }: { trends: TrendSummary }) {
   return (
     <View>
       <Text style={styles.chartMeta}>
-        {trends.symptomBurdenDays} days with one or more symptoms.
+        {trends.symptomBurdenEntriesLast30} entries with one or more symptoms.
       </Text>
       {symptomRows.map((row) => (
         <BarRow

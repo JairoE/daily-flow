@@ -54,6 +54,22 @@ describe('daily log feedback', () => {
     expect(message).toBe('Thank you for taking a step toward a healthier you.');
   });
 
+  it('counts multiple logs on one date as one completed day', () => {
+    const message = getDailyLogSuccessMessage(
+      [
+        entry('2026-07-10', { hadBowelMovement: false }),
+        {
+          ...entry('2026-07-10', { hadBowelMovement: false }),
+          id: 'second-log-same-day',
+          checkedInAt: '2026-07-10T18:00:00.000Z',
+        },
+      ],
+      { today: '2026-07-10' },
+    );
+
+    expect(message).toBe('Thank you for taking a step toward a healthier you.');
+  });
+
   it('uses early streak copy for days 2 through 4', () => {
     const message = getDailyLogSuccessMessage(
       [
