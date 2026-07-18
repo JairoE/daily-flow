@@ -18,6 +18,7 @@ type NotificationsModule = typeof import('expo-notifications');
 
 let notificationModulePromise: Promise<NotificationsModule | null> | null = null;
 let handlerConfigured = false;
+const notificationSyncQueues = new Map<string, Promise<void>>();
 
 async function getNotifications(): Promise<NotificationsModule | null> {
   if (Platform.OS === 'web') {
@@ -289,10 +290,10 @@ export async function syncNotificationsAfterEntry(
   await syncNotificationsForDate(profile, entry.localDate);
 }
 
-export async function syncNotificationsForDate(
+async function reconcileNotificationsForDate(
   profile: Profile,
   localDate: string,
-  now = new Date(),
+  now: Date,
 ) {
   const loggedNoRecord = await getNotificationRecord(
     localDate,
@@ -324,4 +325,22 @@ export async function syncNotificationsForDate(
   if (latestEntry) {
     await scheduleLoggedNoReminder(profile, latestEntry);
   }
+}
+
+export function syncNotificationsForDate(
+  profile: Profile,
+  localDate: string,
+  now = new Date(),
+): Promise<void> {
+  const previousSync = notificationSyncQueues.get(localDate) ?? Promise.resolve();
+  const queuedSync = previousSync
+    .catch(() => undefined)
+    .then(() => reconcileNotificationsForDate(profile, localDate, now));
+  notificationSyncQueues.set(localDate, queuedSync);
+
+  return queuedSync.finally(() => {
+    if (notificationSyncQueues.get(localDate) === queuedSync) {
+      notificationSyncQueues.delete(localDate);
+    }
+  });
 }

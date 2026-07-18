@@ -39,7 +39,12 @@ import {
   syncNotificationsAfterEntry,
   syncNotificationsForDate,
 } from '../services/notifications';
-import type { DailyEntry, NotificationType, Profile } from '../types';
+import type {
+  DailyEntry,
+  NotificationRecord,
+  NotificationType,
+  Profile,
+} from '../types';
 
 const profile: Profile = {
   id: 'local-profile',
@@ -78,6 +83,12 @@ function entry(id: string, hadBowelMovement: boolean): DailyEntry {
   };
 }
 
+async function flushMicrotasks() {
+  for (let index = 0; index < 50; index += 1) {
+    await Promise.resolve();
+  }
+}
+
 function record(
   type: NotificationType,
   localDate = '2026-07-17',
@@ -105,6 +116,11 @@ describe('multi-entry notification synchronization', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockGetEntriesByDate.mockReset();
+    mockGetNotificationRecord.mockReset();
+    mockScheduleNotificationAsync.mockReset();
+    mockCancelScheduledNotificationAsync.mockReset();
+    mockUpsertNotificationRecord.mockReset();
     mockScheduleNotificationAsync.mockResolvedValue('new-logged-no');
     mockGetNotificationRecord.mockImplementation(
       async (localDate: string, type: NotificationType) =>
@@ -186,5 +202,49 @@ describe('multi-entry notification synchronization', () => {
       fireDate.getHours(),
       fireDate.getMinutes(),
     ]).toEqual([2026, 6, 17, 22, 0]);
+  });
+
+  it('serializes overlapping reconciliation for the same date', async () => {
+    let resolveFirstSchedule: (notificationId: string) => void = () => undefined;
+    let loggedNoRecord: NotificationRecord | null = null;
+    mockGetEntriesByDate.mockResolvedValue([entry('08:00:00', false)]);
+    mockGetNotificationRecord.mockImplementation(
+      async (localDate: string, type: NotificationType) =>
+        type === 'logged_no_wellness'
+          ? loggedNoRecord
+          : record(type, localDate, 'canceled'),
+    );
+    mockUpsertNotificationRecord.mockImplementation(
+      async (nextRecord: NotificationRecord) => {
+        if (nextRecord.type === 'logged_no_wellness') {
+          loggedNoRecord = nextRecord;
+        }
+      },
+    );
+    mockScheduleNotificationAsync
+      .mockImplementationOnce(
+        () =>
+          new Promise<string>((resolve) => {
+            resolveFirstSchedule = resolve;
+          }),
+      )
+      .mockResolvedValueOnce('second-notification');
+
+    const firstSync = syncNotificationsForDate(profile, '2026-07-17');
+    await flushMicrotasks();
+    const secondSync = syncNotificationsForDate(profile, '2026-07-17');
+    await flushMicrotasks();
+
+    expect(mockScheduleNotificationAsync).toHaveBeenCalledTimes(1);
+
+    resolveFirstSchedule('first-notification');
+    await Promise.all([firstSync, secondSync]);
+
+    expect(mockCancelScheduledNotificationAsync).toHaveBeenCalledWith(
+      'first-notification',
+    );
+    expect(loggedNoRecord).toEqual(
+      expect.objectContaining({ notificationId: 'second-notification' }),
+    );
   });
 });
