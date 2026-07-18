@@ -11,13 +11,17 @@ jest.mock('../services/exportEntries', () => ({
   exportEntriesCsv: jest.fn(),
 }));
 jest.mock('../storage/database', () => ({
+  createDailyEntry: jest.fn(),
   createProfile: jest.fn(),
   deleteAllData: jest.fn(),
+  deleteDailyEntry: jest.fn(),
   getAllEntries: jest.fn(),
   getEntries: jest.fn(),
+  getEntriesByDate: jest.fn(),
   getProfile: jest.fn(),
   initializeStorage: jest.fn(),
   saveProfile: jest.fn(),
+  updateDailyEntry: jest.fn(),
   upsertDailyEntry: jest.fn(),
 }));
 jest.mock('../lib/llmWellnessNotes', () => ({
@@ -31,7 +35,7 @@ jest.mock('../lib/llmWellnessQuestions', () => ({
 
 import { FlowBetterScreen, TodayScreen } from '../../App';
 import { requestLlmWellnessAnswer } from '../lib/llmWellnessQuestions';
-import type { Profile, TrendSummary } from '../types';
+import type { DailyEntry, Profile, TrendSummary } from '../types';
 
 const mockRequestLlmWellnessAnswer =
   requestLlmWellnessAnswer as jest.MockedFunction<
@@ -92,6 +96,31 @@ function renderedText(renderer: ReactTestRenderer): string {
   return JSON.stringify(renderer.toJSON());
 }
 
+function dailyEntry(
+  id: string,
+  checkedInAt: string,
+  hadBowelMovement: boolean,
+): DailyEntry {
+  return {
+    id,
+    localDate: '2026-07-17',
+    hadBowelMovement,
+    detailsRecorded: true,
+    stoolType: hadBowelMovement ? 4 : null,
+    symptoms: {
+      straining: false,
+      pain: false,
+      bloating: false,
+      incompleteEvacuation: false,
+    },
+    laxativeUsed: false,
+    laxativeNote: '',
+    checkedInAt,
+    createdAt: checkedInAt,
+    updatedAt: checkedInAt,
+  };
+}
+
 describe('Flow Better screen', () => {
   beforeEach(() => {
     mockRequestLlmWellnessAnswer.mockReset();
@@ -103,7 +132,7 @@ describe('Flow Better screen', () => {
     act(() => {
       renderer = create(
         createElement(TodayScreen, {
-          entry: null,
+          entries: [],
           includeTodayAsMissed: false,
           onLog: async () => undefined,
         }),
@@ -111,6 +140,67 @@ describe('Flow Better screen', () => {
     });
 
     expect(renderedText(renderer!)).not.toContain('Gentle wellness note');
+  });
+
+  it("renders all of today's logs in chronological order", () => {
+    let renderer: ReactTestRenderer;
+
+    act(() => {
+      renderer = create(
+        createElement(TodayScreen, {
+          entries: [
+            dailyEntry('later-yes', '2026-07-17T18:00:00.000Z', true),
+            dailyEntry('early-no', '2026-07-17T08:00:00.000Z', false),
+          ],
+          includeTodayAsMissed: false,
+          onLog: async () => undefined,
+        }),
+      );
+    });
+
+    const text = renderedText(renderer!);
+    expect(text).toContain("Today's logs");
+    expect(text).toContain('2 logs');
+    expect(text.indexOf('No movement')).toBeLessThan(
+      text.indexOf('Bowel movement · Bristol 4'),
+    );
+  });
+
+  it('resets the form after appending a log', async () => {
+    const onLog = jest.fn(async () => undefined);
+    let renderer: ReactTestRenderer;
+
+    act(() => {
+      renderer = create(
+        createElement(TodayScreen, {
+          entries: [],
+          includeTodayAsMissed: false,
+          onLog,
+        }),
+      );
+    });
+
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Log no for today',
+      }).props.onPress();
+    });
+
+    await act(async () => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Save log',
+      }).props.onPress();
+      await Promise.resolve();
+    });
+
+    expect(onLog).toHaveBeenCalledWith(
+      expect.objectContaining({ hadBowelMovement: false }),
+    );
+    expect(
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Log no for today',
+      }).props.accessibilityState.selected,
+    ).toBe(false);
   });
 
   it('owns the wellness note and question experience', () => {

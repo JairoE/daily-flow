@@ -27,13 +27,13 @@ import {
 import { exportEntriesCsv } from './src/services/exportEntries';
 import {
   createProfile,
+  createDailyEntry,
   deleteAllData,
   getAllEntries,
   getEntries,
   getProfile,
   initializeStorage,
   saveProfile,
-  upsertDailyEntry,
 } from './src/storage/database';
 import {
   addDays,
@@ -51,6 +51,10 @@ import {
   getDailyLogSuccessMessage,
   isDailyLogSuccessMessage,
 } from './src/lib/dailyLogFeedback';
+import {
+  compareDailyEntries,
+  groupEntriesByDate,
+} from './src/lib/dailyEntries';
 import {
   getDailyOpenLoveNotice,
   isDailyOpenLoveNoticeMessage,
@@ -122,8 +126,10 @@ export default function App() {
   const includeTodayAsMissed = profile
     ? isPastCheckInTime(today, profile.checkInTime)
     : false;
-  const todayEntry =
-    entries.find((entry) => entry.localDate === today) ?? null;
+  const todayEntries = useMemo(
+    () => groupEntriesByDate(entries).get(today) ?? [],
+    [entries, today],
+  );
   const historyDays = useMemo(
     () =>
       buildHistoryDays(entries, {
@@ -228,7 +234,7 @@ export default function App() {
       return;
     }
 
-    const entry = await upsertDailyEntry(today, input);
+    const entry = await createDailyEntry(today, input);
     const nextEntries = await refreshEntries();
     await syncNotificationsAfterEntry(profile, entry);
     setNotice(
@@ -245,7 +251,7 @@ export default function App() {
       return;
     }
 
-    const entry = await upsertDailyEntry(localDate, input);
+    const entry = await createDailyEntry(localDate, input);
     await refreshEntries();
 
     if (localDate === today) {
@@ -442,7 +448,7 @@ export default function App() {
         >
           {activeTab === 'today' ? (
             <TodayScreen
-              entry={todayEntry}
+              entries={todayEntries}
               includeTodayAsMissed={includeTodayAsMissed}
               onLog={handleLog}
             />
@@ -742,38 +748,35 @@ function OnboardingScreen({
 }
 
 export function TodayScreen({
-  entry,
+  entries,
   includeTodayAsMissed,
   onLog,
 }: {
-  entry: DailyEntry | null;
+  entries: DailyEntry[];
   includeTodayAsMissed: boolean;
   onLog: (input: DailyEntryInput) => Promise<void>;
 }) {
-  const [hadBowelMovement, setHadBowelMovement] = useState<boolean | null>(
-    entry?.hadBowelMovement ?? null,
-  );
-  const [stoolType, setStoolType] = useState<StoolType | null>(
-    entry?.stoolType ?? null,
-  );
-  const [symptoms, setSymptoms] = useState<DailySymptoms>(
-    entry?.symptoms ?? emptySymptoms,
-  );
-  const [laxativeUsed, setLaxativeUsed] = useState(
-    entry?.laxativeUsed ?? false,
-  );
-  const [laxativeNote, setLaxativeNote] = useState(entry?.laxativeNote ?? '');
+  const [hadBowelMovement, setHadBowelMovement] = useState<boolean | null>(null);
+  const [stoolType, setStoolType] = useState<StoolType | null>(null);
+  const [symptoms, setSymptoms] = useState<DailySymptoms>(emptySymptoms);
+  const [laxativeUsed, setLaxativeUsed] = useState(false);
+  const [laxativeNote, setLaxativeNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const chronologicalEntries = [...entries].sort(compareDailyEntries);
+  const yesCount = chronologicalEntries.filter(
+    (entry) => entry.hadBowelMovement,
+  ).length;
+  const noCount = chronologicalEntries.length - yesCount;
 
-  useEffect(() => {
-    setHadBowelMovement(entry?.hadBowelMovement ?? null);
-    setStoolType(entry?.stoolType ?? null);
-    setSymptoms(entry?.symptoms ?? emptySymptoms);
-    setLaxativeUsed(entry?.laxativeUsed ?? false);
-    setLaxativeNote(entry?.laxativeNote ?? '');
+  function resetForm() {
+    setHadBowelMovement(null);
+    setStoolType(null);
+    setSymptoms(emptySymptoms);
+    setLaxativeUsed(false);
+    setLaxativeNote('');
     setError('');
-  }, [entry]);
+  }
 
   function handleChoice(value: boolean) {
     setHadBowelMovement(value);
@@ -818,15 +821,20 @@ export function TodayScreen({
         laxativeUsed,
         laxativeNote,
       });
+      resetForm();
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : 'Unable to save this log. Please try again.',
+      );
     } finally {
       setSaving(false);
     }
   }
 
-  const status = entry
-    ? entry.hadBowelMovement
-      ? 'Yes logged'
-      : 'No logged'
+  const status = chronologicalEntries.length
+    ? `${chronologicalEntries.length} ${pluralize(chronologicalEntries.length, 'log')} · ${yesCount} Yes · ${noCount} No`
     : includeTodayAsMissed
       ? 'Not checked in yet'
       : 'Ready when you are';
@@ -840,9 +848,9 @@ export function TodayScreen({
         <StatusPill
           label={status}
           tone={
-            entry?.hadBowelMovement
+            yesCount > 0
               ? 'green'
-              : entry
+              : noCount > 0
                 ? 'coral'
                 : includeTodayAsMissed
                   ? 'amber'
@@ -976,11 +984,52 @@ export function TodayScreen({
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
         <PrimaryButton
-          label={saving ? 'Saving...' : 'Save today'}
+          label={saving ? 'Saving...' : 'Save log'}
           disabled={saving}
           onPress={handleSave}
         />
       </View>
+
+      <TodayLogs entries={chronologicalEntries} />
+    </View>
+  );
+}
+
+function TodayLogs({ entries }: { entries: DailyEntry[] }) {
+  return (
+    <View style={styles.panel}>
+      <View style={styles.chartCardHeader}>
+        <Text style={styles.panelTitle}>Today's logs</Text>
+        <Text style={styles.rangeText}>
+          {entries.length} {pluralize(entries.length, 'log')}
+        </Text>
+      </View>
+
+      {entries.length === 0 ? (
+        <Text style={styles.bodyText}>
+          Your saved check-ins will appear here in time order.
+        </Text>
+      ) : (
+        entries.map((entry) => (
+          <View key={entry.id} style={styles.entryTimelineRow}>
+            <Text style={styles.entryTimelineTime}>
+              {formatEntryTime(entry.checkedInAt)}
+            </Text>
+            <View style={styles.entryTimelineContent}>
+              <Text style={styles.entryTimelineTitle}>
+                {entry.hadBowelMovement
+                  ? `Bowel movement${entry.stoolType ? ` · Bristol ${entry.stoolType}` : ''}`
+                  : 'No movement'}
+              </Text>
+              <Text style={styles.historyDetail}>{entryDetailText(entry)}</Text>
+            </View>
+            <StatusPill
+              label={entry.hadBowelMovement ? 'Yes' : 'No'}
+              tone={entry.hadBowelMovement ? 'green' : 'coral'}
+            />
+          </View>
+        ))
+      )}
     </View>
   );
 }
@@ -2284,6 +2333,42 @@ function symptomNames(symptoms: DailySymptoms): string[] {
     .map((option) => option.label);
 }
 
+function formatEntryTime(checkedInAt: string): string {
+  const value = new Date(checkedInAt);
+
+  if (Number.isNaN(value.getTime())) {
+    return 'Saved';
+  }
+
+  return value.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function entryDetailText(entry: DailyEntry): string {
+  if (!entry.detailsRecorded) {
+    return 'Earlier yes/no log';
+  }
+
+  const parts: string[] = [];
+  const symptoms = symptomNames(entry.symptoms);
+
+  if (symptoms.length) {
+    parts.push(symptoms.join(', '));
+  }
+
+  if (entry.laxativeUsed) {
+    parts.push('Laxative used');
+  }
+
+  if (entry.laxativeNote.trim()) {
+    parts.push(`Note: ${entry.laxativeNote.trim()}`);
+  }
+
+  return parts.length ? parts.join(' · ') : 'No added details';
+}
+
 function historyDetailText(day: HistoryDay): string {
   if (!day.entry) {
     return day.status === 'pending' ? 'Waiting for check-in' : 'No check-in';
@@ -3139,6 +3224,30 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     minHeight: 66,
     paddingVertical: 11,
+  },
+  entryTimelineRow: {
+    alignItems: 'center',
+    borderTopColor: palette.border,
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 68,
+    paddingVertical: 10,
+  },
+  entryTimelineTime: {
+    color: palette.softText,
+    flexBasis: 72,
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+    fontWeight: '800',
+  },
+  entryTimelineContent: {
+    flex: 1,
+  },
+  entryTimelineTitle: {
+    color: palette.ink,
+    fontSize: 14,
+    fontWeight: '900',
   },
   historyDateBlock: {
     flex: 1,
