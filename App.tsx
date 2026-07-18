@@ -1848,39 +1848,41 @@ export function CalendarDayButton({
   );
 
   return (
-    <Pressable
-      accessibilityLabel={`${accessibilityLabel}${
-        day.isCurrentMonth ? '' : ', outside current month'
-      }`}
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.calendarDayCell,
-        pressed && styles.pressedControl,
-      ]}
-    >
-      <View
-        style={[
-          styles.calendarDayBubble,
-          !day.isCurrentMonth && styles.calendarDayBubbleOutside,
+    <View style={styles.calendarDayCell}>
+      <Pressable
+        accessibilityLabel={`${accessibilityLabel}${
+          day.isCurrentMonth ? '' : ', outside current month'
+        }`}
+        accessibilityRole="button"
+        accessibilityState={{ selected }}
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.calendarDayButton,
+          pressed && styles.pressedControl,
         ]}
       >
-        {selected ? <View style={styles.calendarDaySelection} /> : null}
-        <View style={styles.calendarDayRing}>
-          <CalendarEntryRing entries={day.entries} />
-        </View>
-        <Text
+        <View
           style={[
-            styles.calendarDayText,
-            !day.isCurrentMonth && styles.calendarDayTextOutside,
-            selected && styles.calendarDayTextSelected,
+            styles.calendarDayBubble,
+            !day.isCurrentMonth && styles.calendarDayBubbleOutside,
           ]}
         >
-          {Number(day.localDate.slice(-2))}
-        </Text>
-      </View>
-    </Pressable>
+          {selected ? <View style={styles.calendarDaySelection} /> : null}
+          <View style={styles.calendarDayRing}>
+            <CalendarEntryRing entries={day.entries} />
+          </View>
+          <Text
+            style={[
+              styles.calendarDayText,
+              !day.isCurrentMonth && styles.calendarDayTextOutside,
+              selected && styles.calendarDayTextSelected,
+            ]}
+          >
+            {Number(day.localDate.slice(-2))}
+          </Text>
+        </View>
+      </Pressable>
+    </View>
   );
 }
 
@@ -3352,6 +3354,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     minHeight: 48,
     width: '14.2857%',
+  },
+  calendarDayButton: {
+    alignItems: 'center',
+    borderRadius: 999,
+    height: 48,
+    justifyContent: 'center',
+    outlineColor: palette.purple,
+    width: 48,
   },
   calendarDayBubble: {
     alignItems: 'center',

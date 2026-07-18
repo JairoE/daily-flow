@@ -1,5 +1,6 @@
 import { createElement } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
+import { StyleSheet } from 'react-native';
 
 jest.mock('../services/notifications', () => ({
   configureNotificationBehavior: jest.fn(),
@@ -77,13 +78,22 @@ describe('CalendarDayButton', () => {
       );
     });
 
-    expect(
-      renderer!.root.findByProps({
-        accessibilityLabel: 'Thu, Jul 9, 3 logs: 1 yes, 2 no',
-      }),
-    ).toBeTruthy();
+    const calendarButton = renderer!.root.findByProps({
+      accessibilityLabel: 'Thu, Jul 9, 3 logs: 1 yes, 2 no',
+    });
+    expect(calendarButton).toBeTruthy();
     expect(renderer!.root.findByType(CalendarEntryRing).props.entries).toEqual(
       entries,
     );
+
+    const buttonStyle = StyleSheet.flatten(
+      calendarButton.props.style({ pressed: false }),
+    );
+    expect(buttonStyle).toMatchObject({
+      borderRadius: 999,
+      height: 48,
+      outlineColor: '#5E4CF3',
+      width: 48,
+    });
   });
 });
