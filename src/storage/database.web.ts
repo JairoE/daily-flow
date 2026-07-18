@@ -7,9 +7,11 @@ import type {
   Profile,
   StoolType,
 } from '../types';
+import { compareDailyEntries } from '../lib/dailyEntries';
 
 const PROFILE_ID = 'local-profile';
 const WEB_STORAGE_KEY = 'daily-flow-state-v1';
+let entryIdCounter = 0;
 
 type WebState = {
   profile: Profile | null;
@@ -101,6 +103,21 @@ function normalizeEntryInput(input: DailyEntryInput) {
   };
 }
 
+function createEntryId(localDate: string, now: string): string {
+  entryIdCounter += 1;
+  const sequence = entryIdCounter.toString().padStart(6, '0');
+  const entropy = Math.random().toString(36).slice(2, 10);
+  return `entry-${localDate}-${now}-${sequence}-${entropy}`;
+}
+
+function compareEntriesByDateAscending(a: DailyEntry, b: DailyEntry): number {
+  return a.localDate.localeCompare(b.localDate) || compareDailyEntries(a, b);
+}
+
+function compareEntriesByDateDescending(a: DailyEntry, b: DailyEntry): number {
+  return b.localDate.localeCompare(a.localDate) || compareDailyEntries(a, b);
+}
+
 function readState(): WebState {
   if (typeof window === 'undefined' || !window.localStorage) {
     return emptyState();
@@ -186,30 +203,47 @@ export async function saveProfile(profile: Profile): Promise<Profile> {
 }
 
 export async function getEntries(limit = 30): Promise<DailyEntry[]> {
-  return readState()
-    .entries.sort((a, b) => b.localDate.localeCompare(a.localDate))
-    .slice(0, limit);
+  const entries = [...readState().entries].sort(compareEntriesByDateDescending);
+  const includedDates = new Set<string>();
+
+  for (const entry of entries) {
+    if (includedDates.size >= limit && !includedDates.has(entry.localDate)) {
+      continue;
+    }
+
+    includedDates.add(entry.localDate);
+  }
+
+  return entries.filter((entry) => includedDates.has(entry.localDate));
 }
 
 export async function getAllEntries(): Promise<DailyEntry[]> {
-  return readState().entries.sort((a, b) => a.localDate.localeCompare(b.localDate));
+  return [...readState().entries].sort(compareEntriesByDateAscending);
+}
+
+export async function getEntriesByDate(
+  localDate: string,
+): Promise<DailyEntry[]> {
+  return readState()
+    .entries.filter((entry) => entry.localDate === localDate)
+    .sort(compareDailyEntries);
 }
 
 export async function getEntryByDate(
   localDate: string,
 ): Promise<DailyEntry | null> {
-  return readState().entries.find((entry) => entry.localDate === localDate) ?? null;
+  const entries = await getEntriesByDate(localDate);
+  return entries.at(-1) ?? null;
 }
 
-export async function upsertDailyEntry(
+export async function createDailyEntry(
   localDate: string,
   input: DailyEntryInput,
 ): Promise<DailyEntry> {
   const now = new Date().toISOString();
-  const existing = await getEntryByDate(localDate);
   const normalized = normalizeEntryInput(input);
   const entry: DailyEntry = {
-    id: existing?.id ?? `entry-${localDate}`,
+    id: createEntryId(localDate, now),
     localDate,
     hadBowelMovement: normalized.hadBowelMovement,
     detailsRecorded: normalized.detailsRecorded,
@@ -218,20 +252,74 @@ export async function upsertDailyEntry(
     laxativeUsed: normalized.laxativeUsed,
     laxativeNote: normalized.laxativeNote,
     checkedInAt: now,
-    createdAt: existing?.createdAt ?? now,
+    createdAt: now,
     updatedAt: now,
   };
   const state = readState();
 
   writeState({
     ...state,
-    entries: [
-      entry,
-      ...state.entries.filter((item) => item.localDate !== localDate),
-    ],
+    entries: [...state.entries, entry],
   });
 
   return entry;
+}
+
+export async function updateDailyEntry(
+  id: string,
+  input: DailyEntryInput,
+): Promise<DailyEntry | null> {
+  const state = readState();
+  const existing = state.entries.find((entry) => entry.id === id);
+
+  if (!existing) {
+    return null;
+  }
+
+  const normalized = normalizeEntryInput(input);
+  const updated: DailyEntry = {
+    ...existing,
+    hadBowelMovement: normalized.hadBowelMovement,
+    detailsRecorded: normalized.detailsRecorded,
+    stoolType: normalized.stoolType,
+    symptoms: normalized.symptoms,
+    laxativeUsed: normalized.laxativeUsed,
+    laxativeNote: normalized.laxativeNote,
+    updatedAt: new Date().toISOString(),
+  };
+
+  writeState({
+    ...state,
+    entries: state.entries.map((entry) => (entry.id === id ? updated : entry)),
+  });
+
+  return updated;
+}
+
+export async function deleteDailyEntry(id: string): Promise<boolean> {
+  const state = readState();
+  const nextEntries = state.entries.filter((entry) => entry.id !== id);
+
+  if (nextEntries.length === state.entries.length) {
+    return false;
+  }
+
+  writeState({ ...state, entries: nextEntries });
+  return true;
+}
+
+/** @deprecated Use createDailyEntry or updateDailyEntry with an event id. */
+export async function upsertDailyEntry(
+  localDate: string,
+  input: DailyEntryInput,
+): Promise<DailyEntry> {
+  const existing = await getEntryByDate(localDate);
+
+  if (existing) {
+    return (await updateDailyEntry(existing.id, input)) ?? existing;
+  }
+
+  return createDailyEntry(localDate, input);
 }
 
 export async function getNotificationRecords(): Promise<NotificationRecord[]> {
