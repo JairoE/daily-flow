@@ -16,16 +16,17 @@ const allowedOrigins = parseAllowedOrigins('https://jairoe.github.io');
 const accessToken = 'secret-token';
 const payload = {
   summaryWindowDays: 30,
+  bowelMovementCountLast30: 12,
   bowelMovementDaysLast30: 10,
-  averagePerWeekLast30: 2.3,
+  averageBowelMovementsPerWeekLast30: 2.8,
   currentGapDays: 2,
   longestGapDays: 4,
-  hardOrLumpyDays: 3,
-  looseOrWateryDays: 1,
-  symptomBurdenDays: 6,
-  laxativeUseDays: 2,
+  hardOrLumpyMovementsLast30: 3,
+  looseOrWateryMovementsLast30: 1,
+  symptomBurdenEntriesLast30: 6,
+  laxativeUseEntriesLast30: 2,
   checkInRateLast30: 87,
-  detailDays: 12,
+  detailEntriesLast30: 12,
 };
 const questionPayload = {
   question: 'What gentle habits may support regularity?',
@@ -85,6 +86,15 @@ test('rejects raw-data-shaped payloads', () => {
   assert.equal(validate({ body: { ...payload, entries: [] } }).status, 400);
   assert.equal(validate({ body: { ...payload, localDate: '2026-07-10' } }).status, 400);
   assert.equal(validate({ body: { ...payload, laxativeNote: 'private note' } }).status, 400);
+});
+
+test('rejects the legacy day-oriented aggregate contract', () => {
+  assert.equal(
+    validate({ body: { ...payload, averagePerWeekLast30: 2.3 } }).status,
+    400,
+  );
+  const { bowelMovementCountLast30: _removed, ...missingEventCount } = payload;
+  assert.equal(validate({ body: missingEventCount }).status, 400);
 });
 
 test('accepts only a bounded question and valid summary', () => {

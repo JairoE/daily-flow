@@ -23,17 +23,20 @@ import {
   configureNotificationBehavior,
   rescheduleProfileNotifications,
   syncNotificationsAfterEntry,
+  syncNotificationsForDate,
 } from './src/services/notifications';
 import { exportEntriesCsv } from './src/services/exportEntries';
 import {
   createProfile,
+  createDailyEntry,
   deleteAllData,
+  deleteDailyEntry,
   getAllEntries,
   getEntries,
   getProfile,
   initializeStorage,
   saveProfile,
-  upsertDailyEntry,
+  updateDailyEntry,
 } from './src/storage/database';
 import {
   addDays,
@@ -51,6 +54,12 @@ import {
   getDailyLogSuccessMessage,
   isDailyLogSuccessMessage,
 } from './src/lib/dailyLogFeedback';
+import {
+  compareDailyEntries,
+  formatEntryDayAccessibility,
+  groupEntriesByDate,
+} from './src/lib/dailyEntries';
+import { CalendarEntryRing } from './src/components/CalendarEntryRing';
 import {
   getDailyOpenLoveNotice,
   isDailyOpenLoveNoticeMessage,
@@ -110,6 +119,16 @@ const stoolTypeOptions: { type: StoolType; label: string; detail: string }[] = [
   { type: 7, label: 'Type 7', detail: 'Watery' },
 ];
 
+function withPersistedEntry(
+  entries: DailyEntry[],
+  persistedEntry: DailyEntry,
+): DailyEntry[] {
+  return entries
+    .filter((entry) => entry.id !== persistedEntry.id)
+    .concat(persistedEntry)
+    .sort(compareDailyEntries);
+}
+
 export default function App() {
   const [ready, setReady] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -122,8 +141,10 @@ export default function App() {
   const includeTodayAsMissed = profile
     ? isPastCheckInTime(today, profile.checkInTime)
     : false;
-  const todayEntry =
-    entries.find((entry) => entry.localDate === today) ?? null;
+  const todayEntries = useMemo(
+    () => groupEntriesByDate(entries).get(today) ?? [],
+    [entries, today],
+  );
   const historyDays = useMemo(
     () =>
       buildHistoryDays(entries, {
@@ -209,6 +230,23 @@ export default function App() {
     return nextEntries;
   }
 
+  async function refreshEntriesAfterWrite(fallbackEntries: DailyEntry[]) {
+    try {
+      return await refreshEntries();
+    } catch {
+      return fallbackEntries;
+    }
+  }
+
+  async function syncRemindersAfterWrite(task: () => Promise<void>) {
+    try {
+      await task();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async function handleProfileCreated(nextProfile: Profile) {
     const savedProfile = await saveProfile(nextProfile);
     setProfile(savedProfile);
@@ -228,14 +266,20 @@ export default function App() {
       return;
     }
 
-    const entry = await upsertDailyEntry(today, input);
-    const nextEntries = await refreshEntries();
-    await syncNotificationsAfterEntry(profile, entry);
+    const entry = await createDailyEntry(today, input);
+    const persistedEntries = withPersistedEntry(entries, entry);
+    setEntries((current) => withPersistedEntry(current, entry));
+    const nextEntries = await refreshEntriesAfterWrite(persistedEntries);
+    const remindersSynced = await syncRemindersAfterWrite(() =>
+      syncNotificationsAfterEntry(profile, entry),
+    );
     setNotice(
-      getDailyLogSuccessMessage(nextEntries, {
-        today,
-        loggedAt: new Date(entry.checkedInAt),
-      }),
+      remindersSynced
+        ? getDailyLogSuccessMessage(nextEntries, {
+            today,
+            loggedAt: new Date(entry.checkedInAt),
+          })
+        : 'Log saved, but reminders could not be updated.',
     );
     setNoticeKey((current) => current + 1);
   }
@@ -245,14 +289,86 @@ export default function App() {
       return;
     }
 
-    const entry = await upsertDailyEntry(localDate, input);
-    await refreshEntries();
-
-    if (localDate === today) {
-      await syncNotificationsAfterEntry(profile, entry);
+    if (localDate > today) {
+      throw new Error('Choose today or an earlier date.');
     }
 
-    setNotice(`Saved ${shortMonthDay(localDate)}.`);
+    const entry = await createDailyEntry(localDate, input);
+    const persistedEntries = withPersistedEntry(entries, entry);
+    setEntries((current) => withPersistedEntry(current, entry));
+    await refreshEntriesAfterWrite(persistedEntries);
+
+    let remindersSynced = true;
+
+    if (localDate === today) {
+      remindersSynced = await syncRemindersAfterWrite(() =>
+        syncNotificationsAfterEntry(profile, entry),
+      );
+    }
+
+    setNotice(
+      remindersSynced
+        ? `Saved ${shortMonthDay(localDate)}.`
+        : 'Log saved, but reminders could not be updated.',
+    );
+  }
+
+  async function handleUpdateEntry(
+    id: string,
+    input: DailyEntryInput,
+  ): Promise<DailyEntry | null> {
+    const updated = await updateDailyEntry(id, input);
+
+    if (!updated) {
+      await refreshEntries();
+      return null;
+    }
+
+    const persistedEntries = withPersistedEntry(entries, updated);
+    setEntries((current) => withPersistedEntry(current, updated));
+    await refreshEntriesAfterWrite(persistedEntries);
+    let remindersSynced = true;
+
+    if (profile && updated.localDate === today) {
+      remindersSynced = await syncRemindersAfterWrite(() =>
+        syncNotificationsAfterEntry(profile, updated),
+      );
+    }
+
+    setNotice(
+      remindersSynced
+        ? `Updated ${shortMonthDay(updated.localDate)}.`
+        : 'Log updated, but reminders could not be updated.',
+    );
+
+    return updated;
+  }
+
+  async function handleDeleteEntry(id: string): Promise<boolean> {
+    const deletingEntry = entries.find((entry) => entry.id === id) ?? null;
+    const deleted = await deleteDailyEntry(id);
+
+    if (!deleted) {
+      await refreshEntries();
+      return false;
+    }
+
+    const persistedEntries = entries.filter((entry) => entry.id !== id);
+    setEntries((current) => current.filter((entry) => entry.id !== id));
+    await refreshEntriesAfterWrite(persistedEntries);
+    const remindersSynced =
+      profile && deletingEntry
+        ? await syncRemindersAfterWrite(() =>
+            syncNotificationsForDate(profile, deletingEntry.localDate),
+          )
+        : true;
+    setNotice(
+      remindersSynced
+        ? 'Log deleted.'
+        : 'Log deleted, but reminders could not be updated.',
+    );
+
+    return true;
   }
 
   async function handleSaveSettings(nextProfile: Profile) {
@@ -442,7 +558,7 @@ export default function App() {
         >
           {activeTab === 'today' ? (
             <TodayScreen
-              entry={todayEntry}
+              entries={todayEntries}
               includeTodayAsMissed={includeTodayAsMissed}
               onLog={handleLog}
             />
@@ -459,7 +575,9 @@ export default function App() {
           {activeTab === 'history' ? (
             <HistoryScreen
               monthDays={monthHistoryDays}
-              onLogDate={handleLogForDate}
+              onCreateEntry={handleLogForDate}
+              onDeleteEntry={handleDeleteEntry}
+              onUpdateEntry={handleUpdateEntry}
             />
           ) : null}
 
@@ -742,38 +860,35 @@ function OnboardingScreen({
 }
 
 export function TodayScreen({
-  entry,
+  entries,
   includeTodayAsMissed,
   onLog,
 }: {
-  entry: DailyEntry | null;
+  entries: DailyEntry[];
   includeTodayAsMissed: boolean;
   onLog: (input: DailyEntryInput) => Promise<void>;
 }) {
-  const [hadBowelMovement, setHadBowelMovement] = useState<boolean | null>(
-    entry?.hadBowelMovement ?? null,
-  );
-  const [stoolType, setStoolType] = useState<StoolType | null>(
-    entry?.stoolType ?? null,
-  );
-  const [symptoms, setSymptoms] = useState<DailySymptoms>(
-    entry?.symptoms ?? emptySymptoms,
-  );
-  const [laxativeUsed, setLaxativeUsed] = useState(
-    entry?.laxativeUsed ?? false,
-  );
-  const [laxativeNote, setLaxativeNote] = useState(entry?.laxativeNote ?? '');
+  const [hadBowelMovement, setHadBowelMovement] = useState<boolean | null>(null);
+  const [stoolType, setStoolType] = useState<StoolType | null>(null);
+  const [symptoms, setSymptoms] = useState<DailySymptoms>(emptySymptoms);
+  const [laxativeUsed, setLaxativeUsed] = useState(false);
+  const [laxativeNote, setLaxativeNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const chronologicalEntries = [...entries].sort(compareDailyEntries);
+  const yesCount = chronologicalEntries.filter(
+    (entry) => entry.hadBowelMovement,
+  ).length;
+  const noCount = chronologicalEntries.length - yesCount;
 
-  useEffect(() => {
-    setHadBowelMovement(entry?.hadBowelMovement ?? null);
-    setStoolType(entry?.stoolType ?? null);
-    setSymptoms(entry?.symptoms ?? emptySymptoms);
-    setLaxativeUsed(entry?.laxativeUsed ?? false);
-    setLaxativeNote(entry?.laxativeNote ?? '');
+  function resetForm() {
+    setHadBowelMovement(null);
+    setStoolType(null);
+    setSymptoms(emptySymptoms);
+    setLaxativeUsed(false);
+    setLaxativeNote('');
     setError('');
-  }, [entry]);
+  }
 
   function handleChoice(value: boolean) {
     setHadBowelMovement(value);
@@ -818,15 +933,20 @@ export function TodayScreen({
         laxativeUsed,
         laxativeNote,
       });
+      resetForm();
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : 'Unable to save this log. Please try again.',
+      );
     } finally {
       setSaving(false);
     }
   }
 
-  const status = entry
-    ? entry.hadBowelMovement
-      ? 'Yes logged'
-      : 'No logged'
+  const status = chronologicalEntries.length
+    ? `${chronologicalEntries.length} ${pluralize(chronologicalEntries.length, 'log')} · ${yesCount} Yes · ${noCount} No`
     : includeTodayAsMissed
       ? 'Not checked in yet'
       : 'Ready when you are';
@@ -840,9 +960,9 @@ export function TodayScreen({
         <StatusPill
           label={status}
           tone={
-            entry?.hadBowelMovement
+            yesCount > 0
               ? 'green'
-              : entry
+              : noCount > 0
                 ? 'coral'
                 : includeTodayAsMissed
                   ? 'amber'
@@ -976,11 +1096,52 @@ export function TodayScreen({
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
         <PrimaryButton
-          label={saving ? 'Saving...' : 'Save today'}
+          label={saving ? 'Saving...' : 'Save log'}
           disabled={saving}
           onPress={handleSave}
         />
       </View>
+
+      <TodayLogs entries={chronologicalEntries} />
+    </View>
+  );
+}
+
+function TodayLogs({ entries }: { entries: DailyEntry[] }) {
+  return (
+    <View style={styles.panel}>
+      <View style={styles.chartCardHeader}>
+        <Text style={styles.panelTitle}>Today's logs</Text>
+        <Text style={styles.rangeText}>
+          {entries.length} {pluralize(entries.length, 'log')}
+        </Text>
+      </View>
+
+      {entries.length === 0 ? (
+        <Text style={styles.bodyText}>
+          Your saved check-ins will appear here in time order.
+        </Text>
+      ) : (
+        entries.map((entry) => (
+          <View key={entry.id} style={styles.entryTimelineRow}>
+            <Text style={styles.entryTimelineTime}>
+              {formatEntryTime(entry.checkedInAt)}
+            </Text>
+            <View style={styles.entryTimelineContent}>
+              <Text style={styles.entryTimelineTitle}>
+                {entry.hadBowelMovement
+                  ? `Bowel movement${entry.stoolType ? ` · Bristol ${entry.stoolType}` : ''}`
+                  : 'No movement'}
+              </Text>
+              <Text style={styles.historyDetail}>{entryDetailText(entry)}</Text>
+            </View>
+            <StatusPill
+              label={entry.hadBowelMovement ? 'Yes' : 'No'}
+              tone={entry.hadBowelMovement ? 'green' : 'coral'}
+            />
+          </View>
+        ))
+      )}
     </View>
   );
 }
@@ -1149,12 +1310,19 @@ export function FlowBetterScreen({
   );
 }
 
-function HistoryScreen({
+export function HistoryScreen({
   monthDays,
-  onLogDate,
+  onCreateEntry,
+  onDeleteEntry,
+  onUpdateEntry,
 }: {
   monthDays: HistoryMonthDay[];
-  onLogDate: (localDate: string, input: DailyEntryInput) => Promise<void>;
+  onCreateEntry: (localDate: string, input: DailyEntryInput) => Promise<void>;
+  onDeleteEntry: (id: string) => Promise<boolean>;
+  onUpdateEntry: (
+    id: string,
+    input: DailyEntryInput,
+  ) => Promise<DailyEntry | null>;
 }) {
   const today = getLocalDateKey();
   const defaultEditDate = addDays(today, -1);
@@ -1163,6 +1331,7 @@ function HistoryScreen({
   const visibleHistoryDays = currentMonthDays
     .filter((day) => day.localDate <= today)
     .reverse();
+  const selectedDay = monthDays.find((day) => day.localDate === selectedDate);
 
   return (
     <View>
@@ -1172,10 +1341,12 @@ function HistoryScreen({
         onSelectDate={setSelectedDate}
       />
 
-      <BackfillEntryPanel
+      <SelectedDayActivity
+        day={selectedDay}
         localDate={selectedDate}
-        onDateChange={setSelectedDate}
-        onSave={onLogDate}
+        onCreateEntry={onCreateEntry}
+        onDeleteEntry={onDeleteEntry}
+        onUpdateEntry={onUpdateEntry}
       />
 
       <View style={styles.panel}>
@@ -1187,10 +1358,7 @@ function HistoryScreen({
               <Text style={styles.historyDate}>{day.localDate}</Text>
               <Text style={styles.historyDetail}>{historyDetailText(day)}</Text>
             </View>
-            <StatusPill
-              label={statusText(day.status)}
-              tone={statusTone(day.status)}
-            />
+            <HistoryDayBadges day={day} />
           </View>
         ))}
       </View>
@@ -1198,18 +1366,195 @@ function HistoryScreen({
   );
 }
 
-function BackfillEntryPanel({
+function HistoryDayBadges({ day }: { day: HistoryDay }) {
+  const yesCount = day.entries.filter((entry) => entry.hadBowelMovement).length;
+  const noCount = day.entries.length - yesCount;
+
+  if (day.entries.length === 0) {
+    return (
+      <StatusPill label={statusText(day.status)} tone={statusTone(day.status)} />
+    );
+  }
+
+  return (
+    <View style={styles.historyBadgeRow}>
+      {yesCount > 0 ? (
+        <StatusPill label={`${yesCount} Yes`} tone="green" />
+      ) : null}
+      {noCount > 0 ? <StatusPill label={`${noCount} No`} tone="coral" /> : null}
+    </View>
+  );
+}
+
+function SelectedDayActivity({
+  day,
   localDate,
-  onDateChange,
-  onSave,
+  onCreateEntry,
+  onDeleteEntry,
+  onUpdateEntry,
 }: {
+  day?: HistoryMonthDay;
   localDate: string;
-  onDateChange: (localDate: string) => void;
-  onSave: (localDate: string, input: DailyEntryInput) => Promise<void>;
+  onCreateEntry: (localDate: string, input: DailyEntryInput) => Promise<void>;
+  onDeleteEntry: (id: string) => Promise<boolean>;
+  onUpdateEntry: (
+    id: string,
+    input: DailyEntryInput,
+  ) => Promise<DailyEntry | null>;
 }) {
-  const [hadBowelMovement, setHadBowelMovement] = useState<boolean | null>(null);
-  const [stoolType, setStoolType] = useState<StoolType | null>(null);
+  const entries = day?.entries ?? [];
+  const yesCount = entries.filter((entry) => entry.hadBowelMovement).length;
+  const noCount = entries.length - yesCount;
+  const isFutureDate = localDate > getLocalDateKey();
+  const [editor, setEditor] = useState<
+    { mode: 'create' } | { mode: 'edit'; entryId: string } | null
+  >(null);
+  const editingEntry =
+    editor?.mode === 'edit'
+      ? entries.find((entry) => entry.id === editor.entryId) ?? null
+      : null;
+
+  useEffect(() => {
+    setEditor(null);
+  }, [localDate]);
+
+  if (editor) {
+    return (
+      <HistoryEntryEditor
+        entry={editingEntry}
+        localDate={localDate}
+        mode={editor.mode}
+        onCancel={() => setEditor(null)}
+        onCreateEntry={onCreateEntry}
+        onDeleteEntry={onDeleteEntry}
+        onUpdateEntry={onUpdateEntry}
+      />
+    );
+  }
+
+  return (
+    <View style={styles.panel}>
+      <View style={styles.chartCardHeader}>
+        <View style={styles.historyActivityHeading}>
+          <Text style={styles.panelTitle}>Selected day activity</Text>
+          <Text style={styles.historyDate}>{day?.label ?? localDate}</Text>
+        </View>
+        <Text style={styles.rangeText}>
+          {entries.length} {pluralize(entries.length, 'log')}
+        </Text>
+      </View>
+
+      <View style={styles.historyCountRow}>
+        <StatusPill label={`${yesCount} Yes`} tone="green" />
+        <StatusPill label={`${noCount} No`} tone="coral" />
+      </View>
+
+      {isFutureDate ? (
+        <Text style={styles.historyEmptyText}>Future dates are read-only.</Text>
+      ) : null}
+
+      {entries.length === 0 ? (
+        <Text style={styles.historyEmptyText}>No logs saved for this day.</Text>
+      ) : (
+        entries.map((entry) => {
+          const content = (
+            <>
+              <Text style={styles.entryTimelineTime}>
+                {formatEntryTime(entry.checkedInAt)}
+              </Text>
+              <View style={styles.entryTimelineContent}>
+                <Text style={styles.entryTimelineTitle}>
+                  {entry.hadBowelMovement
+                    ? `Bowel movement${entry.stoolType ? ` · Bristol ${entry.stoolType}` : ''}`
+                    : 'No movement'}
+                </Text>
+                <Text style={styles.historyDetail}>{entryDetailText(entry)}</Text>
+              </View>
+              <StatusPill
+                label={entry.hadBowelMovement ? 'Yes' : 'No'}
+                tone={entry.hadBowelMovement ? 'green' : 'coral'}
+              />
+            </>
+          );
+
+          if (isFutureDate) {
+            return (
+              <View
+                key={entry.id}
+                style={[styles.entryTimelineRow, styles.historyEntryButton]}
+              >
+                {content}
+              </View>
+            );
+          }
+
+          return (
+            <Pressable
+              key={entry.id}
+              accessibilityHint="Opens this individual log for editing"
+              accessibilityLabel={`Edit ${entry.hadBowelMovement ? 'Yes' : 'No'} log at ${formatEntryTime(entry.checkedInAt)}`}
+              accessibilityRole="button"
+              onPress={() => setEditor({ mode: 'edit', entryId: entry.id })}
+              style={({ pressed }) => [
+                styles.entryTimelineRow,
+                styles.historyEntryButton,
+                pressed && styles.pressedControl,
+              ]}
+              testID={`history-entry-${entry.id}`}
+            >
+              {content}
+            </Pressable>
+          );
+        })
+      )}
+
+      {!isFutureDate ? (
+        <View style={styles.panelAction}>
+          <PrimaryButton
+            label="Add another log"
+            onPress={() => setEditor({ mode: 'create' })}
+          />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function HistoryEntryEditor({
+  entry,
+  localDate,
+  mode,
+  onCancel,
+  onCreateEntry,
+  onDeleteEntry,
+  onUpdateEntry,
+}: {
+  entry: DailyEntry | null;
+  localDate: string;
+  mode: 'create' | 'edit';
+  onCancel: () => void;
+  onCreateEntry: (localDate: string, input: DailyEntryInput) => Promise<void>;
+  onDeleteEntry: (id: string) => Promise<boolean>;
+  onUpdateEntry: (
+    id: string,
+    input: DailyEntryInput,
+  ) => Promise<DailyEntry | null>;
+}) {
+  const [hadBowelMovement, setHadBowelMovement] = useState<boolean | null>(
+    entry?.hadBowelMovement ?? null,
+  );
+  const [stoolType, setStoolType] = useState<StoolType | null>(
+    entry?.stoolType ?? null,
+  );
+  const [symptoms, setSymptoms] = useState<DailySymptoms>(
+    entry?.symptoms ?? emptySymptoms,
+  );
+  const [laxativeUsed, setLaxativeUsed] = useState(
+    entry?.laxativeUsed ?? false,
+  );
+  const [laxativeNote, setLaxativeNote] = useState(entry?.laxativeNote ?? '');
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState('');
 
   function handleChoice(value: boolean) {
@@ -1221,16 +1566,18 @@ function BackfillEntryPanel({
     }
   }
 
-  async function handleSave() {
-    const normalizedDate = normalizeBackfillLocalDate(localDate);
+  function toggleSymptom(key: keyof DailySymptoms, value: boolean) {
+    setSymptoms((current) => ({ ...current, [key]: value }));
+  }
 
-    if (!normalizedDate) {
-      setError('Use a valid date in YYYY-MM-DD format.');
+  async function handleSave() {
+    if (localDate > getLocalDateKey()) {
+      setError('Choose today or an earlier date.');
       return;
     }
 
-    if (normalizedDate > getLocalDateKey()) {
-      setError('Choose today or an earlier date.');
+    if (mode === 'edit' && !entry) {
+      setError('This log no longer exists. Return to the day and try again.');
       return;
     }
 
@@ -1244,142 +1591,280 @@ function BackfillEntryPanel({
       return;
     }
 
+    if (laxativeNote.trim().length > 160) {
+      setError('Keep the note to 160 characters or fewer.');
+      return;
+    }
+
+    const input: DailyEntryInput = {
+      hadBowelMovement,
+      stoolType: hadBowelMovement ? stoolType : null,
+      symptoms,
+      laxativeUsed,
+      laxativeNote,
+    };
+
     setSaving(true);
     setError('');
 
     try {
-      await onSave(normalizedDate, {
-        hadBowelMovement,
-        stoolType: hadBowelMovement ? stoolType : null,
-      });
-      onDateChange(addDays(normalizedDate, -1));
-      setHadBowelMovement(null);
-      setStoolType(null);
+      if (mode === 'create') {
+        await onCreateEntry(localDate, input);
+        onCancel();
+        return;
+      }
+
+      const updated = await onUpdateEntry(entry!.id, input);
+
+      if (!updated) {
+        setError('This log no longer exists. Return to the day and try again.');
+        return;
+      }
+
+      onCancel();
+    } catch (caught) {
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : 'Unable to save this log. Please try again.',
+      );
     } finally {
       setSaving(false);
     }
   }
 
+  function confirmDelete() {
+    if (!entry) {
+      return;
+    }
+
+    Alert.alert(
+      'Delete this log?',
+      'This removes only this check-in. Other logs on the day stay saved.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            setDeleting(true);
+            setError('');
+            onDeleteEntry(entry.id)
+              .then((deleted) => {
+                if (!deleted) {
+                  setError(
+                    'This log no longer exists. Return to the day and try again.',
+                  );
+                  return;
+                }
+
+                onCancel();
+              })
+              .catch((caught: unknown) => {
+                setError(
+                  caught instanceof Error
+                    ? caught.message
+                    : 'Unable to delete this log. Please try again.',
+                );
+              })
+              .finally(() => setDeleting(false));
+          },
+        },
+      ],
+    );
+  }
+
+  const disabled = saving || deleting;
+
   return (
     <View style={styles.panel}>
       <View style={styles.chartCardHeader}>
-        <Text style={styles.panelTitle}>Edit any day</Text>
-        <Text style={styles.rangeText}>Optional</Text>
-      </View>
-      <Text style={styles.bodyText}>
-        Add or update remembered check-ins for today or any earlier date.
-      </Text>
-      <View style={styles.backfillForm}>
-        <LabeledInput
-          label="Date"
-          value={localDate}
-          placeholder="YYYY-MM-DD"
-          keyboardType="numbers-and-punctuation"
-          onChangeText={(value) => {
-            onDateChange(value);
-            setError('');
-          }}
-        />
-        <View style={styles.answerRow}>
-          <Pressable
-            accessibilityLabel="Backfill yes for selected date"
-            accessibilityRole="button"
-            accessibilityState={{
-              disabled: saving,
-              selected: hadBowelMovement === true,
-            }}
-            disabled={saving}
-            onPress={() => handleChoice(true)}
-            style={({ pressed }) => [
-              styles.answerButton,
-              styles.yesButton,
-              pressed && styles.pressedControl,
-              hadBowelMovement === true && styles.selectedYesButton,
-            ]}
-          >
-            <Text
-              style={[
-                styles.answerButtonText,
-                hadBowelMovement === true && styles.selectedAnswerText,
-              ]}
-            >
-              Yes
-            </Text>
-          </Pressable>
-          <Pressable
-            accessibilityLabel="Backfill no for selected date"
-            accessibilityRole="button"
-            accessibilityState={{
-              disabled: saving,
-              selected: hadBowelMovement === false,
-            }}
-            disabled={saving}
-            onPress={() => handleChoice(false)}
-            style={({ pressed }) => [
-              styles.answerButton,
-              styles.noButton,
-              pressed && styles.pressedControl,
-              hadBowelMovement === false && styles.selectedNoButton,
-            ]}
-          >
-            <Text
-              style={[
-                styles.answerButtonText,
-                hadBowelMovement === false && styles.selectedAnswerText,
-              ]}
-            >
-              No
-            </Text>
-          </Pressable>
+        <View style={styles.historyActivityHeading}>
+          <Text style={styles.panelTitle}>
+            {mode === 'create' ? 'Add log' : 'Edit log'}
+          </Text>
+          <Text style={styles.historyDate}>{localDate}</Text>
         </View>
-        {hadBowelMovement ? (
-          <View style={styles.inlineSection}>
-            <Text style={styles.sectionLabel}>Bristol stool type</Text>
-            <View style={styles.stoolGrid}>
-              {stoolTypeOptions.map((option) => (
-                <Pressable
-                  key={option.type}
-                  accessibilityLabel={`Select ${option.label}: ${option.detail}`}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected: stoolType === option.type }}
-                  onPress={() => {
-                    setStoolType(option.type);
-                    setError('');
-                  }}
-                  style={({ pressed }) => [
-                    styles.stoolButton,
-                    pressed && styles.pressedControl,
-                    stoolType === option.type && styles.selectedStoolButton,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.stoolButtonLabel,
-                      stoolType === option.type && styles.selectedStoolText,
-                    ]}
-                  >
-                    {option.label}
-                  </Text>
-                  <Text
-                    style={[
-                      styles.stoolButtonDetail,
-                      stoolType === option.type && styles.selectedStoolText,
-                    ]}
-                  >
-                    {option.detail}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
+        {entry ? (
+          <Text style={styles.rangeText}>{formatEntryTime(entry.checkedInAt)}</Text>
         ) : null}
       </View>
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
-      <PrimaryButton
-        label={saving ? 'Saving...' : 'Save selected day'}
-        disabled={saving}
-        onPress={handleSave}
-      />
+
+      <View style={styles.answerRow}>
+        <Pressable
+          accessibilityLabel="Choose Yes for this log"
+          accessibilityRole="button"
+          accessibilityState={{
+            disabled,
+            selected: hadBowelMovement === true,
+          }}
+          disabled={disabled}
+          onPress={() => handleChoice(true)}
+          style={({ pressed }) => [
+            styles.answerButton,
+            styles.yesButton,
+            pressed && styles.pressedControl,
+            hadBowelMovement === true && styles.selectedYesButton,
+          ]}
+        >
+          <Text
+            style={[
+              styles.answerButtonText,
+              hadBowelMovement === true && styles.selectedAnswerText,
+            ]}
+          >
+            Yes
+          </Text>
+        </Pressable>
+        <Pressable
+          accessibilityLabel="Choose No for this log"
+          accessibilityRole="button"
+          accessibilityState={{
+            disabled,
+            selected: hadBowelMovement === false,
+          }}
+          disabled={disabled}
+          onPress={() => handleChoice(false)}
+          style={({ pressed }) => [
+            styles.answerButton,
+            styles.noButton,
+            pressed && styles.pressedControl,
+            hadBowelMovement === false && styles.selectedNoButton,
+          ]}
+        >
+          <Text
+            style={[
+              styles.answerButtonText,
+              hadBowelMovement === false && styles.selectedAnswerText,
+            ]}
+          >
+            No
+          </Text>
+        </Pressable>
+      </View>
+
+      {hadBowelMovement ? (
+        <View style={styles.inlineSection}>
+          <Text style={styles.sectionLabel}>Bristol stool type</Text>
+          <View style={styles.stoolGrid}>
+            {stoolTypeOptions.map((option) => (
+              <Pressable
+                key={option.type}
+                accessibilityLabel={`Select ${option.label}: ${option.detail}`}
+                accessibilityRole="button"
+                accessibilityState={{ selected: stoolType === option.type }}
+                disabled={disabled}
+                onPress={() => {
+                  setStoolType(option.type);
+                  setError('');
+                }}
+                style={({ pressed }) => [
+                  styles.stoolButton,
+                  pressed && styles.pressedControl,
+                  stoolType === option.type && styles.selectedStoolButton,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.stoolButtonLabel,
+                    stoolType === option.type && styles.selectedStoolText,
+                  ]}
+                >
+                  {option.label}
+                </Text>
+                <Text
+                  style={[
+                    styles.stoolButtonDetail,
+                    stoolType === option.type && styles.selectedStoolText,
+                  ]}
+                >
+                  {option.detail}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      ) : null}
+
+      <View style={styles.inlineSection}>
+        <Text style={styles.sectionLabel}>Symptoms</Text>
+        {symptomOptions.map((option) => (
+          <ToggleRow
+            key={option.key}
+            label={option.label}
+            value={symptoms[option.key]}
+            onValueChange={(value) => toggleSymptom(option.key, value)}
+          />
+        ))}
+      </View>
+
+      <View style={styles.inlineSection}>
+        <Text style={styles.sectionLabel}>Laxative or context</Text>
+        <ToggleRow
+          label="Laxative used"
+          value={laxativeUsed}
+          onValueChange={setLaxativeUsed}
+        />
+        <LabeledInput
+          label="Short note"
+          value={laxativeNote}
+          placeholder="Optional, 160 characters"
+          maxLength={160}
+          multiline
+          onChangeText={setLaxativeNote}
+        />
+      </View>
+
+      {error ? (
+        <Text accessibilityLiveRegion="polite" style={styles.errorText}>
+          {error}
+        </Text>
+      ) : null}
+
+      <View style={styles.historyEditorActions}>
+        <PrimaryButton
+          label={
+            saving
+              ? 'Saving...'
+              : mode === 'create'
+                ? 'Save new log'
+                : 'Save changes'
+          }
+          disabled={disabled}
+          onPress={handleSave}
+        />
+        <Pressable
+          accessibilityLabel="Cancel editing"
+          accessibilityRole="button"
+          disabled={disabled}
+          onPress={onCancel}
+          style={({ pressed }) => [
+            styles.secondaryButton,
+            pressed && styles.pressedControl,
+            disabled && styles.disabledButton,
+          ]}
+        >
+          <Text style={styles.secondaryButtonText}>Cancel</Text>
+        </Pressable>
+      </View>
+
+      {mode === 'edit' && entry ? (
+        <Pressable
+          accessibilityLabel="Delete this log"
+          accessibilityRole="button"
+          disabled={disabled}
+          onPress={confirmDelete}
+          style={({ pressed }) => [
+            styles.historyDeleteButton,
+            pressed && styles.pressedControl,
+            disabled && styles.disabledButton,
+          ]}
+        >
+          <Text style={styles.deleteButtonText}>
+            {deleting ? 'Deleting...' : 'Delete this log'}
+          </Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -1441,7 +1926,7 @@ function MonthCalendarCard({
   );
 }
 
-function CalendarDayButton({
+export function CalendarDayButton({
   day,
   selected,
   onPress,
@@ -1450,49 +1935,57 @@ function CalendarDayButton({
   selected: boolean;
   onPress: () => void;
 }) {
-  const answered = day.status === 'yes' || day.status === 'no';
+  const yesCount = day.entries.filter((entry) => entry.hadBowelMovement).length;
+  const noCount = day.entries.length - yesCount;
+  const accessibilityLabel = formatEntryDayAccessibility(
+    {
+      localDate: day.localDate,
+      entries: day.entries,
+      status: day.status,
+      yesCount,
+      noCount,
+      totalCount: day.entries.length,
+      hasBowelMovement: yesCount > 0,
+    },
+    day.label,
+  );
 
   return (
-    <Pressable
-      accessibilityLabel={`${day.label}, ${statusText(day.status)}${
-        day.isCurrentMonth ? '' : ', outside current month'
-      }`}
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.calendarDayCell,
-        pressed && styles.pressedControl,
-      ]}
-    >
-      <View
-        style={[
-          styles.calendarDayBubble,
-          !day.isCurrentMonth && styles.calendarDayBubbleOutside,
-          answered && styles.calendarDayBubbleLogged,
-          day.status === 'no' && styles.calendarDayBubbleNo,
-          selected && styles.calendarDayBubbleSelected,
+    <View style={styles.calendarDayCell}>
+      <Pressable
+        accessibilityLabel={`${accessibilityLabel}${
+          day.isCurrentMonth ? '' : ', outside current month'
+        }`}
+        accessibilityRole="button"
+        accessibilityState={{ selected }}
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.calendarDayButton,
+          pressed && styles.pressedControl,
         ]}
       >
-        {answered ? (
-          <View
-            style={[
-              styles.calendarLoggedAccent,
-              day.status === 'no' && styles.calendarLoggedAccentNo,
-            ]}
-          />
-        ) : null}
-        <Text
+        <View
           style={[
-            styles.calendarDayText,
-            !day.isCurrentMonth && styles.calendarDayTextOutside,
-            selected && styles.calendarDayTextSelected,
+            styles.calendarDayBubble,
+            !day.isCurrentMonth && styles.calendarDayBubbleOutside,
           ]}
         >
-          {Number(day.localDate.slice(-2))}
-        </Text>
-      </View>
-    </Pressable>
+          {selected ? <View style={styles.calendarDaySelection} /> : null}
+          <View style={styles.calendarDayRing}>
+            <CalendarEntryRing entries={day.entries} />
+          </View>
+          <Text
+            style={[
+              styles.calendarDayText,
+              !day.isCurrentMonth && styles.calendarDayTextOutside,
+              selected && styles.calendarDayTextSelected,
+            ]}
+          >
+            {Number(day.localDate.slice(-2))}
+          </Text>
+        </View>
+      </Pressable>
+    </View>
   );
 }
 
@@ -1540,9 +2033,9 @@ function TrendsScreen({
             tone="blue"
           />
           <SummaryMetric
-            label="Average"
-            value={`${trends.averagePerWeekLast30}`}
-            detail="per week"
+            label="Average BMs"
+            value={`${trends.averageBowelMovementsPerWeekLast30}`}
+            detail="movements per week"
             tone="teal"
           />
           <SummaryMetric
@@ -1560,9 +2053,9 @@ function TrendsScreen({
             tone="slate"
           />
           <SummaryMetric
-            label="Symptoms"
-            value={`${trends.symptomBurdenDays}`}
-            detail="days with any"
+            label="Symptom logs"
+            value={`${trends.symptomBurdenEntriesLast30}`}
+            detail="entries with any"
             tone="coral"
           />
         </View>
@@ -1640,34 +2133,37 @@ function HabitWeekMatrix({ historyDays }: { historyDays: HistoryDay[] }) {
     {
       label: 'Check-in',
       tone: 'blue' as const,
-      isActive: (day: HistoryDay) => day.status === 'yes' || day.status === 'no',
+      isActive: (day: HistoryDay) => day.entries.length > 0,
       isMuted: (day: HistoryDay) => day.status === 'missed' || day.status === 'pending',
     },
     {
       label: 'Movement',
       tone: 'green' as const,
-      isActive: (day: HistoryDay) => day.status === 'yes',
+      isActive: (day: HistoryDay) =>
+        day.entries.some((entry) => entry.hadBowelMovement),
       isMuted: (day: HistoryDay) => day.status === 'missed' || day.status === 'pending',
     },
     {
       label: 'Details',
       tone: 'purple' as const,
-      isActive: (day: HistoryDay) => day.entry?.detailsRecorded === true,
+      isActive: (day: HistoryDay) =>
+        day.entries.some((entry) => entry.detailsRecorded),
       isMuted: (day: HistoryDay) => day.status === 'missed' || day.status === 'pending',
     },
     {
       label: 'Symptoms',
       tone: 'rose' as const,
       isActive: (day: HistoryDay) =>
-        day.entry ? symptomCount(day.entry.symptoms) > 0 : false,
+        day.entries.some((entry) => symptomCount(entry.symptoms) > 0),
       isMuted: (day: HistoryDay) => day.status === 'missed' || day.status === 'pending',
     },
     {
       label: 'Context',
       tone: 'amber' as const,
       isActive: (day: HistoryDay) =>
-        day.entry?.laxativeUsed === true ||
-        Boolean(day.entry?.laxativeNote.trim()),
+        day.entries.some(
+          (entry) => entry.laxativeUsed || Boolean(entry.laxativeNote.trim()),
+        ),
       isMuted: (day: HistoryDay) => day.status === 'missed' || day.status === 'pending',
     },
   ];
@@ -1723,8 +2219,12 @@ function RecentProgressChart({ historyDays }: { historyDays: HistoryDay[] }) {
         <View style={styles.progressGridLineTop} />
         <View style={styles.progressGridLineMiddle} />
         {days.map((day) => {
-          const answered = day.status === 'yes' || day.status === 'no';
-          const strongHeight = day.status === 'yes' ? 42 : 0;
+          const answered = day.entries.length > 0;
+          const strongHeight = day.entries.some(
+            (entry) => entry.hadBowelMovement,
+          )
+            ? 42
+            : 0;
           const softHeight = answered ? 100 : 12;
 
           return (
@@ -1824,9 +2324,9 @@ function IntervalChart({ trends }: { trends: TrendSummary }) {
 
   return (
     <View>
-      {intervals.map((point) => (
+      {intervals.map((point, index) => (
         <BarRow
-          key={point.localDate}
+          key={`${point.localDate}-${index}`}
           label={point.label}
           value={point.daysSincePrevious ?? 0}
           maxValue={maxValue}
@@ -1890,7 +2390,7 @@ function SymptomBurdenChart({ trends }: { trends: TrendSummary }) {
   return (
     <View>
       <Text style={styles.chartMeta}>
-        {trends.symptomBurdenDays} days with one or more symptoms.
+        {trends.symptomBurdenEntriesLast30} entries with one or more symptoms.
       </Text>
       {symptomRows.map((row) => (
         <BarRow
@@ -1907,7 +2407,7 @@ function SymptomBurdenChart({ trends }: { trends: TrendSummary }) {
 function LaxativeTimeline({ historyDays }: { historyDays: HistoryDay[] }) {
   const chronologicalDays = [...historyDays].reverse();
   const hasDetails = chronologicalDays.some(
-    (day) => day.entry?.detailsRecorded,
+    (day) => day.entries.some((entry) => entry.detailsRecorded),
   );
 
   if (!hasDetails) {
@@ -1922,7 +2422,8 @@ function LaxativeTimeline({ historyDays }: { historyDays: HistoryDay[] }) {
             <View
               style={[
                 styles.timelineDot,
-                day.entry?.laxativeUsed && styles.timelineDotActive,
+                day.entries.some((entry) => entry.laxativeUsed) &&
+                  styles.timelineDotActive,
               ]}
             />
           </View>
@@ -2284,42 +2785,90 @@ function symptomNames(symptoms: DailySymptoms): string[] {
     .map((option) => option.label);
 }
 
-function historyDetailText(day: HistoryDay): string {
-  if (!day.entry) {
-    return day.status === 'pending' ? 'Waiting for check-in' : 'No check-in';
+function formatEntryTime(checkedInAt: string): string {
+  const value = new Date(checkedInAt);
+
+  if (Number.isNaN(value.getTime())) {
+    return 'Saved';
   }
 
-  if (!day.entry.detailsRecorded) {
+  return value.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function entryDetailText(entry: DailyEntry): string {
+  if (!entry.detailsRecorded) {
     return 'Earlier yes/no log';
   }
 
   const parts: string[] = [];
-
-  if (day.entry.stoolType) {
-    parts.push(`Bristol ${day.entry.stoolType}`);
-  }
-
-  const symptoms = symptomNames(day.entry.symptoms);
+  const symptoms = symptomNames(entry.symptoms);
 
   if (symptoms.length) {
     parts.push(symptoms.join(', '));
   }
 
-  if (day.entry.laxativeUsed) {
+  if (entry.laxativeUsed) {
     parts.push('Laxative used');
   }
 
-  if (day.entry.laxativeNote.trim()) {
-    parts.push(`Note: ${day.entry.laxativeNote.trim()}`);
+  if (entry.laxativeNote.trim()) {
+    parts.push(`Note: ${entry.laxativeNote.trim()}`);
   }
 
   return parts.length ? parts.join(' · ') : 'No added details';
 }
 
+function historyDetailText(day: HistoryDay): string {
+  if (day.entries.length === 0) {
+    return day.status === 'pending' ? 'Waiting for check-in' : 'No check-in';
+  }
+
+  const yesCount = day.entries.filter((entry) => entry.hadBowelMovement).length;
+  const noCount = day.entries.length - yesCount;
+  const bristolTypes = [
+    ...new Set(
+      day.entries
+        .map((entry) => entry.stoolType)
+        .filter((type): type is StoolType => type !== null),
+    ),
+  ];
+  const symptomLabels = [
+    ...new Set(day.entries.flatMap((entry) => symptomNames(entry.symptoms))),
+  ];
+  const laxativeCount = day.entries.filter((entry) => entry.laxativeUsed).length;
+  const noteCount = day.entries.filter((entry) => entry.laxativeNote.trim()).length;
+  const parts = [
+    `${day.entries.length} ${pluralize(day.entries.length, 'log')}`,
+    `${yesCount} Yes`,
+    `${noCount} No`,
+  ];
+
+  if (bristolTypes.length) {
+    parts.push(`Bristol ${bristolTypes.join(', ')}`);
+  }
+
+  if (symptomLabels.length) {
+    parts.push(symptomLabels.join(', '));
+  }
+
+  if (laxativeCount > 0) {
+    parts.push(`${laxativeCount} laxative ${pluralize(laxativeCount, 'entry')}`);
+  }
+
+  if (noteCount > 0) {
+    parts.push(`${noteCount} ${pluralize(noteCount, 'note')}`);
+  }
+
+  return parts.join(' · ');
+}
+
 function laxativeNoteSummary(historyDays: HistoryDay[]): string {
-  const count = historyDays.filter(
-    (day) => day.entry?.detailsRecorded && day.entry.laxativeNote.trim(),
-  ).length;
+  const count = historyDays
+    .flatMap((day) => day.entries)
+    .filter((entry) => entry.detailsRecorded && entry.laxativeNote.trim()).length;
 
   return count === 1 ? '1 note' : `${count} notes`;
 }
@@ -2341,6 +2890,10 @@ function statusText(status: HistoryDay['status']): string {
     return 'No';
   }
 
+  if (status === 'mixed') {
+    return 'Mixed';
+  }
+
   if (status === 'missed') {
     return 'Missed';
   }
@@ -2355,6 +2908,10 @@ function statusTone(status: HistoryDay['status']): 'green' | 'coral' | 'amber' |
 
   if (status === 'no') {
     return 'coral';
+  }
+
+  if (status === 'mixed') {
+    return 'blue';
   }
 
   if (status === 'missed') {
@@ -2434,19 +2991,6 @@ function weekdayInitial(localDate: string): string {
   return parseLocalDateKey(localDate)
     .toLocaleDateString(undefined, { weekday: 'short' })
     .slice(0, 1);
-}
-
-function normalizeBackfillLocalDate(value: string): string | null {
-  const trimmed = value.trim();
-
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    return null;
-  }
-
-  const parsed = parseLocalDateKey(trimmed);
-  const normalized = getLocalDateKey(parsed);
-
-  return normalized === trimmed ? normalized : null;
 }
 
 function weekdayShort(localDate: string): string {
@@ -2858,9 +3402,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
-  backfillForm: {
-    marginTop: 14,
-  },
   calendarPanel: {
     backgroundColor: palette.surface,
     borderRadius: 28,
@@ -2917,11 +3458,17 @@ const styles = StyleSheet.create({
     minHeight: 48,
     width: '14.2857%',
   },
+  calendarDayButton: {
+    alignItems: 'center',
+    borderRadius: 999,
+    height: 48,
+    justifyContent: 'center',
+    outlineColor: palette.purple,
+    width: 48,
+  },
   calendarDayBubble: {
     alignItems: 'center',
-    borderColor: 'transparent',
     borderRadius: 999,
-    borderWidth: 4,
     height: 42,
     justifyContent: 'center',
     position: 'relative',
@@ -2930,33 +3477,23 @@ const styles = StyleSheet.create({
   calendarDayBubbleOutside: {
     opacity: 0.42,
   },
-  calendarDayBubbleLogged: {
-    borderColor: palette.purpleSoft,
-  },
-  calendarDayBubbleNo: {
-    borderColor: '#FFB8BE',
-  },
-  calendarDayBubbleSelected: {
+  calendarDaySelection: {
     backgroundColor: palette.purpleFaint,
-  },
-  calendarLoggedAccent: {
-    backgroundColor: palette.purple,
     borderRadius: 999,
-    height: 18,
+    height: 34,
     position: 'absolute',
-    right: 1,
-    top: -2,
-    transform: [{ rotate: '-28deg' }],
-    width: 7,
+    width: 34,
   },
-  calendarLoggedAccentNo: {
-    backgroundColor: palette.coral,
+  calendarDayRing: {
+    position: 'absolute',
+    zIndex: 1,
   },
   calendarDayText: {
     color: palette.ink,
     fontSize: 14,
     fontWeight: '800',
     fontVariant: ['tabular-nums'],
+    zIndex: 2,
   },
   calendarDayTextOutside: {
     color: palette.softText,
@@ -2995,6 +3532,33 @@ const styles = StyleSheet.create({
     color: palette.surface,
     fontSize: 16,
     fontWeight: '900',
+  },
+  secondaryButton: {
+    alignItems: 'center',
+    backgroundColor: palette.surface,
+    borderColor: palette.border,
+    borderRadius: 20,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minHeight: 50,
+    paddingHorizontal: 16,
+  },
+  secondaryButtonText: {
+    color: palette.ink,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  historyEditorActions: {
+    gap: 10,
+  },
+  historyDeleteButton: {
+    alignItems: 'center',
+    borderColor: palette.coral,
+    borderRadius: 20,
+    borderWidth: 1,
+    justifyContent: 'center',
+    marginTop: 20,
+    minHeight: 50,
   },
   deleteButton: {
     alignItems: 'center',
@@ -3140,9 +3704,54 @@ const styles = StyleSheet.create({
     minHeight: 66,
     paddingVertical: 11,
   },
+  entryTimelineRow: {
+    alignItems: 'center',
+    borderTopColor: palette.border,
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 68,
+    paddingVertical: 10,
+  },
+  entryTimelineTime: {
+    color: palette.softText,
+    flexBasis: 72,
+    fontSize: 12,
+    fontVariant: ['tabular-nums'],
+    fontWeight: '800',
+  },
+  entryTimelineContent: {
+    flex: 1,
+  },
+  entryTimelineTitle: {
+    color: palette.ink,
+    fontSize: 14,
+    fontWeight: '900',
+  },
   historyDateBlock: {
     flex: 1,
     paddingRight: 12,
+  },
+  historyBadgeRow: {
+    alignItems: 'flex-end',
+    gap: 6,
+  },
+  historyActivityHeading: {
+    flex: 1,
+  },
+  historyCountRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 8,
+  },
+  historyEmptyText: {
+    color: palette.muted,
+    fontSize: 15,
+    lineHeight: 22,
+    paddingVertical: 12,
+  },
+  historyEntryButton: {
+    minHeight: 72,
   },
   historyLabel: {
     color: palette.ink,

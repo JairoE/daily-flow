@@ -61,13 +61,13 @@ export type NotificationRecord = {
   createdAt: string;
 };
 
-export type HistoryStatus = 'yes' | 'no' | 'missed' | 'pending';
+export type HistoryStatus = 'yes' | 'no' | 'mixed' | 'missed' | 'pending';
 
 export type HistoryDay = {
   localDate: string;
   label: string;
   status: HistoryStatus;
-  entry: DailyEntry | null;
+  entries: DailyEntry[];
 };
 
 export type HistoryMonthDay = HistoryDay & {
@@ -112,8 +112,9 @@ export type TrendSummary = {
   missedLast30: number;
   daysSinceLastYes: number | null;
   checkInRateLast7: number;
+  bowelMovementCountLast30: number;
   bowelMovementDaysLast30: number;
-  averagePerWeekLast30: number;
+  averageBowelMovementsPerWeekLast30: number;
   currentGapDays: number | null;
   longestGapDays: number;
   gapCount2Plus: number;
@@ -121,13 +122,13 @@ export type TrendSummary = {
   checkInRateLast30: number;
   bristolDistribution: BristolDistributionItem[];
   mostCommonBristolType: StoolType | null;
-  hardOrLumpyDays: number;
-  looseOrWateryDays: number;
+  hardOrLumpyMovementsLast30: number;
+  looseOrWateryMovementsLast30: number;
   symptomCounts: SymptomCounts;
-  symptomBurdenDays: number;
-  laxativeUseDays: number;
-  noteDays: number;
-  detailDays: number;
+  symptomBurdenEntriesLast30: number;
+  laxativeUseEntriesLast30: number;
+  noteEntriesLast30: number;
+  detailEntriesLast30: number;
   weeklyFrequency: WeeklyFrequencyPoint[];
   rolling7: RollingFrequencyPoint[];
   intervals: IntervalPoint[];

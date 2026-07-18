@@ -11,6 +11,7 @@ import type {
 } from '../types';
 
 const PROFILE_ID = 'local-profile';
+let entryIdCounter = 0;
 
 type ProfileRow = {
   id: string;
@@ -73,7 +74,7 @@ CREATE TABLE IF NOT EXISTS profile (
 
 CREATE TABLE IF NOT EXISTS daily_entries (
   id TEXT PRIMARY KEY NOT NULL,
-  local_date TEXT NOT NULL UNIQUE,
+  local_date TEXT NOT NULL,
   had_bowel_movement INTEGER NOT NULL,
   details_recorded INTEGER NOT NULL DEFAULT 0,
   stool_type INTEGER NULL,
@@ -99,6 +100,9 @@ CREATE TABLE IF NOT EXISTS notification_records (
 
 CREATE UNIQUE INDEX IF NOT EXISTS notification_records_date_type_idx
 ON notification_records(local_date, type);
+
+CREATE INDEX IF NOT EXISTS daily_entries_date_time_idx
+ON daily_entries(local_date, checked_in_at, id);
 `;
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
@@ -200,15 +204,27 @@ function normalizeEntryInput(input: DailyEntryInput) {
   };
 }
 
-async function migrateDailyEntryColumns(db: SQLite.SQLiteDatabase) {
-  const columns = await db.getAllAsync<{ name: string }>(
+function createEntryId(localDate: string, now: string): string {
+  entryIdCounter += 1;
+  const sequence = entryIdCounter.toString().padStart(6, '0');
+  const entropy = Math.random().toString(36).slice(2, 10);
+  return `entry-${localDate}-${now}-${sequence}-${entropy}`;
+}
+
+type DailyEntryMigrationExecutor = Pick<
+  SQLite.SQLiteDatabase,
+  'execAsync' | 'getAllAsync'
+>;
+
+async function migrateDailyEntryColumns(executor: DailyEntryMigrationExecutor) {
+  const columns = await executor.getAllAsync<{ name: string }>(
     'PRAGMA table_info(daily_entries)',
   );
   const existingColumns = new Set(columns.map((column) => column.name));
 
   for (const migration of dailyEntryMigrations) {
     if (!existingColumns.has(migration.name)) {
-      await db.execAsync(migration.sql);
+      await executor.execAsync(migration.sql);
     }
   }
 }
@@ -226,12 +242,101 @@ async function migrateProfileColumns(db: SQLite.SQLiteDatabase) {
   }
 }
 
+const dailyEntryDateTimeIndexSql = `
+CREATE INDEX IF NOT EXISTS daily_entries_date_time_idx
+ON daily_entries(local_date, checked_in_at, id);
+`;
+
+const rebuildDailyEntriesSql = `
+DROP TABLE IF EXISTS daily_entries_v2;
+
+CREATE TABLE daily_entries_v2 (
+  id TEXT PRIMARY KEY NOT NULL,
+  local_date TEXT NOT NULL,
+  had_bowel_movement INTEGER NOT NULL,
+  details_recorded INTEGER NOT NULL DEFAULT 0,
+  stool_type INTEGER NULL,
+  symptom_straining INTEGER NOT NULL DEFAULT 0,
+  symptom_pain INTEGER NOT NULL DEFAULT 0,
+  symptom_bloating INTEGER NOT NULL DEFAULT 0,
+  symptom_incomplete_evacuation INTEGER NOT NULL DEFAULT 0,
+  laxative_used INTEGER NOT NULL DEFAULT 0,
+  laxative_note TEXT NOT NULL DEFAULT '',
+  checked_in_at TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+INSERT INTO daily_entries_v2 (
+        id,
+        local_date,
+        had_bowel_movement,
+        details_recorded,
+        stool_type,
+        symptom_straining,
+        symptom_pain,
+        symptom_bloating,
+        symptom_incomplete_evacuation,
+        laxative_used,
+        laxative_note,
+        checked_in_at,
+        created_at,
+        updated_at
+)
+SELECT
+        id,
+        local_date,
+        had_bowel_movement,
+        details_recorded,
+        stool_type,
+        symptom_straining,
+        symptom_pain,
+        symptom_bloating,
+        symptom_incomplete_evacuation,
+        laxative_used,
+        laxative_note,
+        checked_in_at,
+        created_at,
+        updated_at
+FROM daily_entries;
+
+DROP TABLE daily_entries;
+ALTER TABLE daily_entries_v2 RENAME TO daily_entries;
+
+CREATE INDEX IF NOT EXISTS daily_entries_date_time_idx
+ON daily_entries(local_date, checked_in_at, id);
+`;
+
+export async function migrateDailyEntriesForMultipleEvents(
+  db: SQLite.SQLiteDatabase,
+): Promise<boolean> {
+  const table = await db.getFirstAsync<{ sql: string | null }>(
+    "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'daily_entries'",
+  );
+  const hasLegacyUniqueDate =
+    table?.sql !== null &&
+    /\blocal_date\s+TEXT\s+NOT\s+NULL\s+UNIQUE\b/i.test(table?.sql ?? '');
+
+  if (!hasLegacyUniqueDate) {
+    await migrateDailyEntryColumns(db);
+    await db.execAsync(dailyEntryDateTimeIndexSql);
+    return false;
+  }
+
+  await db.withExclusiveTransactionAsync(async (transaction) => {
+    await migrateDailyEntryColumns(transaction);
+    await transaction.execAsync(rebuildDailyEntriesSql);
+  });
+
+  return true;
+}
+
 async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
   if (!dbPromise) {
     dbPromise = SQLite.openDatabaseAsync('daily-flow.db').then(async (db) => {
       await db.execAsync(schema);
       await migrateProfileColumns(db);
-      await migrateDailyEntryColumns(db);
+      await migrateDailyEntriesForMultipleEvents(db);
       return db;
     });
   }
@@ -385,9 +490,17 @@ export async function saveProfile(profile: Profile): Promise<Profile> {
 export async function getEntries(limit = 30): Promise<DailyEntry[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<DailyEntryRow>(
-    `SELECT * FROM daily_entries
-     ORDER BY local_date DESC
-     LIMIT ?`,
+    `WITH recent_dates AS (
+       SELECT local_date
+       FROM daily_entries
+       GROUP BY local_date
+       ORDER BY local_date DESC
+       LIMIT ?
+     )
+     SELECT daily_entries.*
+     FROM daily_entries
+     INNER JOIN recent_dates USING (local_date)
+     ORDER BY local_date DESC, checked_in_at ASC, id ASC`,
     [limit],
   );
 
@@ -398,33 +511,34 @@ export async function getAllEntries(): Promise<DailyEntry[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<DailyEntryRow>(
     `SELECT * FROM daily_entries
-     ORDER BY local_date ASC`,
+     ORDER BY local_date ASC, checked_in_at ASC, id ASC`,
   );
 
   return rows.map(mapEntry);
 }
 
-export async function getEntryByDate(
+export async function getEntriesByDate(
   localDate: string,
-): Promise<DailyEntry | null> {
+): Promise<DailyEntry[]> {
   const db = await getDatabase();
-  const row = await db.getFirstAsync<DailyEntryRow>(
-    'SELECT * FROM daily_entries WHERE local_date = ? LIMIT 1',
+  const rows = await db.getAllAsync<DailyEntryRow>(
+    `SELECT * FROM daily_entries
+     WHERE local_date = ?
+     ORDER BY checked_in_at ASC, id ASC`,
     [localDate],
   );
 
-  return row ? mapEntry(row) : null;
+  return rows.map(mapEntry);
 }
 
-export async function upsertDailyEntry(
+export async function createDailyEntry(
   localDate: string,
   input: DailyEntryInput,
 ): Promise<DailyEntry> {
   const now = new Date().toISOString();
-  const existing = await getEntryByDate(localDate);
   const normalized = normalizeEntryInput(input);
   const entry: DailyEntry = {
-    id: existing?.id ?? `entry-${localDate}`,
+    id: createEntryId(localDate, now),
     localDate,
     hadBowelMovement: normalized.hadBowelMovement,
     detailsRecorded: normalized.detailsRecorded,
@@ -433,7 +547,7 @@ export async function upsertDailyEntry(
     laxativeUsed: normalized.laxativeUsed,
     laxativeNote: normalized.laxativeNote,
     checkedInAt: now,
-    createdAt: existing?.createdAt ?? now,
+    createdAt: now,
     updatedAt: now,
   };
   const db = await getDatabase();
@@ -454,19 +568,7 @@ export async function upsertDailyEntry(
       checked_in_at,
       created_at,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(local_date) DO UPDATE SET
-      had_bowel_movement = excluded.had_bowel_movement,
-      details_recorded = excluded.details_recorded,
-      stool_type = excluded.stool_type,
-      symptom_straining = excluded.symptom_straining,
-      symptom_pain = excluded.symptom_pain,
-      symptom_bloating = excluded.symptom_bloating,
-      symptom_incomplete_evacuation = excluded.symptom_incomplete_evacuation,
-      laxative_used = excluded.laxative_used,
-      laxative_note = excluded.laxative_note,
-      checked_in_at = excluded.checked_in_at,
-      updated_at = excluded.updated_at`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       entry.id,
       entry.localDate,
@@ -486,6 +588,70 @@ export async function upsertDailyEntry(
   );
 
   return entry;
+}
+
+export async function updateDailyEntry(
+  id: string,
+  input: DailyEntryInput,
+): Promise<DailyEntry | null> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<DailyEntryRow>(
+    'SELECT * FROM daily_entries WHERE id = ? LIMIT 1',
+    [id],
+  );
+
+  if (!row) {
+    return null;
+  }
+
+  const existing = mapEntry(row);
+  const normalized = normalizeEntryInput(input);
+  const updated: DailyEntry = {
+    ...existing,
+    hadBowelMovement: normalized.hadBowelMovement,
+    detailsRecorded: normalized.detailsRecorded,
+    stoolType: normalized.stoolType,
+    symptoms: normalized.symptoms,
+    laxativeUsed: normalized.laxativeUsed,
+    laxativeNote: normalized.laxativeNote,
+    updatedAt: new Date().toISOString(),
+  };
+
+  await db.runAsync(
+    `UPDATE daily_entries SET
+      had_bowel_movement = ?,
+      details_recorded = ?,
+      stool_type = ?,
+      symptom_straining = ?,
+      symptom_pain = ?,
+      symptom_bloating = ?,
+      symptom_incomplete_evacuation = ?,
+      laxative_used = ?,
+      laxative_note = ?,
+      updated_at = ?
+     WHERE id = ?`,
+    [
+      updated.hadBowelMovement ? 1 : 0,
+      updated.detailsRecorded ? 1 : 0,
+      updated.stoolType,
+      updated.symptoms.straining ? 1 : 0,
+      updated.symptoms.pain ? 1 : 0,
+      updated.symptoms.bloating ? 1 : 0,
+      updated.symptoms.incompleteEvacuation ? 1 : 0,
+      updated.laxativeUsed ? 1 : 0,
+      updated.laxativeNote,
+      updated.updatedAt,
+      updated.id,
+    ],
+  );
+
+  return updated;
+}
+
+export async function deleteDailyEntry(id: string): Promise<boolean> {
+  const db = await getDatabase();
+  const result = await db.runAsync('DELETE FROM daily_entries WHERE id = ?', [id]);
+  return result.changes > 0;
 }
 
 export async function getNotificationRecords(): Promise<NotificationRecord[]> {

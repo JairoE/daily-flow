@@ -3,12 +3,14 @@ import { Platform } from 'react-native';
 import {
   clearNotificationRecords,
   getEntries,
+  getEntriesByDate,
   getNotificationRecord,
   getNotificationRecords,
   markNotificationRecordCanceled,
   upsertNotificationRecord,
 } from '../storage/database';
 import type { DailyEntry, NotificationRecord, NotificationType, Profile } from '../types';
+import { getLocalDateKey } from '../lib/dates';
 import { getLoggedNoReminderDate, getReminderCopy, getUpcomingMissedReminderTargets } from '../lib/reminders';
 import { getDailyTriggerParts } from '../lib/reminders';
 
@@ -16,6 +18,7 @@ type NotificationsModule = typeof import('expo-notifications');
 
 let notificationModulePromise: Promise<NotificationsModule | null> | null = null;
 let handlerConfigured = false;
+const notificationSyncQueues = new Map<string, Promise<void>>();
 
 async function getNotifications(): Promise<NotificationsModule | null> {
   if (Platform.OS === 'web') {
@@ -23,7 +26,9 @@ async function getNotifications(): Promise<NotificationsModule | null> {
   }
 
   if (!notificationModulePromise) {
-    notificationModulePromise = import('expo-notifications');
+    notificationModulePromise = Promise.resolve(
+      require('expo-notifications') as NotificationsModule,
+    );
   }
 
   return notificationModulePromise;
@@ -142,6 +147,53 @@ export async function scheduleLoggedNoReminder(profile: Profile, entry: DailyEnt
   );
 }
 
+async function restoreMissedReminderForDate(
+  profile: Profile,
+  localDate: string,
+  now: Date,
+) {
+  const Notifications = await getNotifications();
+
+  if (!Notifications || !profile.remindersEnabled) {
+    return;
+  }
+
+  const target = getUpcomingMissedReminderTargets(profile, {
+    from: now,
+    days: 1,
+  }).find((candidate) => candidate.localDate === localDate);
+
+  if (!target) {
+    return;
+  }
+
+  const existingRecord = await getNotificationRecord(
+    localDate,
+    'missed_checkin',
+  );
+
+  if (existingRecord?.status === 'scheduled') {
+    return;
+  }
+
+  const copy = getReminderCopy('missed_checkin', profile.privateNotifications);
+  const notificationId = await Notifications.scheduleNotificationAsync({
+    content: {
+      title: copy.title,
+      body: copy.body,
+    },
+    trigger: {
+      type: Notifications.SchedulableTriggerInputTypes.DATE,
+      date: target.fireDate,
+      channelId: 'daily-flow-reminders',
+    },
+  });
+
+  await upsertNotificationRecord(
+    buildRecord(localDate, 'missed_checkin', notificationId),
+  );
+}
+
 export async function rescheduleProfileNotifications(profile: Profile): Promise<boolean> {
   const Notifications = await getNotifications();
 
@@ -229,10 +281,66 @@ export async function syncNotificationsAfterEntry(
   profile: Profile | null,
   entry: DailyEntry,
 ) {
+  await cancelMissedReminderForDate(entry.localDate);
+
   if (!profile || !profile.remindersEnabled) {
     return;
   }
 
-  await cancelMissedReminderForDate(entry.localDate);
-  await scheduleLoggedNoReminder(profile, entry);
+  await syncNotificationsForDate(profile, entry.localDate);
+}
+
+async function reconcileNotificationsForDate(
+  profile: Profile,
+  localDate: string,
+  now: Date,
+) {
+  const loggedNoRecord = await getNotificationRecord(
+    localDate,
+    'logged_no_wellness',
+  );
+
+  if (localDate !== getLocalDateKey(now) || !profile.remindersEnabled) {
+    await cancelRecord(loggedNoRecord);
+    return;
+  }
+
+  const dayEntries = await getEntriesByDate(localDate);
+
+  if (dayEntries.length === 0) {
+    await cancelRecord(loggedNoRecord);
+    await restoreMissedReminderForDate(profile, localDate, now);
+    return;
+  }
+
+  await cancelMissedReminderForDate(localDate);
+
+  if (dayEntries.some((dayEntry) => dayEntry.hadBowelMovement)) {
+    await cancelRecord(loggedNoRecord);
+    return;
+  }
+
+  const latestEntry = dayEntries.at(-1);
+
+  if (latestEntry) {
+    await scheduleLoggedNoReminder(profile, latestEntry);
+  }
+}
+
+export function syncNotificationsForDate(
+  profile: Profile,
+  localDate: string,
+  now = new Date(),
+): Promise<void> {
+  const previousSync = notificationSyncQueues.get(localDate) ?? Promise.resolve();
+  const queuedSync = previousSync
+    .catch(() => undefined)
+    .then(() => reconcileNotificationsForDate(profile, localDate, now));
+  notificationSyncQueues.set(localDate, queuedSync);
+
+  return queuedSync.finally(() => {
+    if (notificationSyncQueues.get(localDate) === queuedSync) {
+      notificationSyncQueues.delete(localDate);
+    }
+  });
 }

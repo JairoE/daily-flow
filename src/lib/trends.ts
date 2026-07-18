@@ -18,10 +18,7 @@ import {
   getRecentDateKeys,
   parseLocalDateKey,
 } from './dates';
-
-function entryMap(entries: DailyEntry[]): Map<string, DailyEntry> {
-  return new Map(entries.map((entry) => [entry.localDate, entry]));
-}
+import { groupEntriesByDate, summarizeEntryDay } from './dailyEntries';
 
 const stoolTypes: StoolType[] = [1, 2, 3, 4, 5, 6, 7];
 
@@ -33,7 +30,7 @@ const emptySymptomCounts: SymptomCounts = {
 };
 
 function isAnswered(day: HistoryDay): boolean {
-  return day.status === 'yes' || day.status === 'no';
+  return day.status === 'yes' || day.status === 'no' || day.status === 'mixed';
 }
 
 function isNonPending(day: HistoryDay): boolean {
@@ -70,7 +67,7 @@ function summarizeGaps(chronologicalDays: HistoryDay[]) {
       continue;
     }
 
-    if (day.status === 'yes') {
+    if (day.status === 'yes' || day.status === 'mixed') {
       if (seenYes && currentRun >= 2) {
         gapCount2Plus += 1;
       }
@@ -121,7 +118,11 @@ function buildWeeklyFrequency(
       label: `${formatShortDate(firstDay.localDate)}-${formatShortDate(lastDay.localDate)}`,
       startDate: firstDay.localDate,
       endDate: lastDay.localDate,
-      count: weekDays.filter((day) => day.status === 'yes').length,
+      count: weekDays.reduce(
+        (count, day) =>
+          count + day.entries.filter((entry) => entry.hadBowelMovement).length,
+        0,
+      ),
     });
   }
 
@@ -135,7 +136,11 @@ function buildRolling7(chronologicalDays: HistoryDay[]): RollingFrequencyPoint[]
     return {
       localDate: day.localDate,
       label: day.label,
-      count: windowDays.filter((item) => item.status === 'yes').length,
+      count: windowDays.reduce(
+        (count, item) =>
+          count + item.entries.filter((entry) => entry.hadBowelMovement).length,
+        0,
+      ),
     };
   });
 }
@@ -145,18 +150,20 @@ function buildIntervals(chronologicalDays: HistoryDay[]): IntervalPoint[] {
   const intervals: IntervalPoint[] = [];
 
   for (const day of chronologicalDays) {
-    if (day.status !== 'yes') {
-      continue;
-    }
+    for (const entry of day.entries) {
+      if (!entry.hadBowelMovement) {
+        continue;
+      }
 
-    intervals.push({
-      localDate: day.localDate,
-      label: day.label,
-      daysSincePrevious: previousYesDate
-        ? daysBetween(previousYesDate, day.localDate)
-        : null,
-    });
-    previousYesDate = day.localDate;
+      intervals.push({
+        localDate: day.localDate,
+        label: day.label,
+        daysSincePrevious: previousYesDate
+          ? daysBetween(previousYesDate, day.localDate)
+          : null,
+      });
+      previousYesDate = day.localDate;
+    }
   }
 
   return intervals;
@@ -192,29 +199,20 @@ export function buildHistoryDays(
 ): HistoryDay[] {
   const days = options.days ?? 30;
   const today = options.today ?? getLocalDateKey();
-  const byDate = entryMap(entries);
+  const byDate = groupEntriesByDate(entries);
 
   return getRecentDateKeys(days, today)
     .reverse()
     .map((localDate) => {
-      const entry = byDate.get(localDate) ?? null;
-      const isToday = localDate === today;
-
-      if (entry) {
-        return {
-          localDate,
-          label: formatFriendlyDate(localDate, today),
-          status: entry.hadBowelMovement ? 'yes' : 'no',
-          entry,
-        };
-      }
-
+      const summary = summarizeEntryDay(localDate, byDate.get(localDate) ?? [], {
+        today,
+        includeTodayAsMissed: options.includeTodayAsMissed,
+      });
       return {
         localDate,
         label: formatFriendlyDate(localDate, today),
-        status:
-          isToday && !options.includeTodayAsMissed ? 'pending' : 'missed',
-        entry: null,
+        status: summary.status,
+        entries: summary.entries,
       };
     });
 }
@@ -232,33 +230,22 @@ export function buildMonthHistoryDays(
     new Date(currentDate.getFullYear(), currentDate.getMonth(), 1),
   );
   const gridStart = addDays(monthStart, -parseLocalDateKey(monthStart).getDay());
-  const byDate = entryMap(entries);
+  const byDate = groupEntriesByDate(entries);
 
   return Array.from({ length: 42 }, (_, index) => {
     const localDate = addDays(gridStart, index);
-    const entry = byDate.get(localDate) ?? null;
-    const isToday = localDate === today;
+    const summary = summarizeEntryDay(localDate, byDate.get(localDate) ?? [], {
+      today,
+      includeTodayAsMissed: options.includeTodayAsMissed,
+    });
     const isCurrentMonth =
       parseLocalDateKey(localDate).getMonth() === currentDate.getMonth();
-
-    if (entry) {
-      return {
-        localDate,
-        label: formatFriendlyDate(localDate, today),
-        status: entry.hadBowelMovement ? 'yes' : 'no',
-        entry,
-        isCurrentMonth,
-      };
-    }
 
     return {
       localDate,
       label: formatFriendlyDate(localDate, today),
-      status:
-        localDate > today || (isToday && !options.includeTodayAsMissed)
-          ? 'pending'
-          : 'missed',
-      entry: null,
+      status: summary.status,
+      entries: summary.entries,
       isCurrentMonth,
     };
   });
@@ -287,9 +274,11 @@ export function summarizeTrends(
   const nonPendingLast7 = history7.filter(isNonPending).length;
   const answeredLast30 = history30.filter(isAnswered).length;
   const nonPendingLast30 = history30.filter(isNonPending).length;
-  const detailEntries = chronological30
-    .map((day) => day.entry)
-    .filter((entry): entry is DailyEntry => entry?.detailsRecorded === true);
+  const windowEntries = chronological30.flatMap((day) => day.entries);
+  const detailEntries = windowEntries.filter((entry) => entry.detailsRecorded);
+  const bowelMovementCountLast30 = windowEntries.filter(
+    (entry) => entry.hadBowelMovement,
+  ).length;
   const bristolDistribution = buildBristolDistribution(detailEntries);
   const symptomCounts = detailEntries.reduce<SymptomCounts>(
     (counts, entry) => ({
@@ -303,17 +292,50 @@ export function summarizeTrends(
     emptySymptomCounts,
   );
   const gapSummary = summarizeGaps(chronological30);
-  const yesLast30 = history30.filter((day) => day.status === 'yes').length;
+  const yesLast30 = history30.filter(
+    (day) => day.status === 'yes' || day.status === 'mixed',
+  ).length;
+  const averageBowelMovementsPerWeekLast30 = roundedOneDecimal(
+    (bowelMovementCountLast30 / 30) * 7,
+  );
+  const hardOrLumpyMovementsLast30 = detailEntries.filter(
+    (entry) =>
+      entry.hadBowelMovement &&
+      entry.stoolType !== null &&
+      entry.stoolType <= 2,
+  ).length;
+  const looseOrWateryMovementsLast30 = detailEntries.filter(
+    (entry) =>
+      entry.hadBowelMovement &&
+      entry.stoolType !== null &&
+      entry.stoolType >= 6,
+  ).length;
+  const symptomBurdenEntriesLast30 = detailEntries.filter(
+    (entry) =>
+      entry.symptoms.straining ||
+      entry.symptoms.pain ||
+      entry.symptoms.bloating ||
+      entry.symptoms.incompleteEvacuation,
+  ).length;
+  const laxativeUseEntriesLast30 = detailEntries.filter(
+    (entry) => entry.laxativeUsed,
+  ).length;
+  const noteEntriesLast30 = detailEntries.filter((entry) =>
+    Boolean(entry.laxativeNote.trim()),
+  ).length;
 
   return {
-    yesLast7: history7.filter((day) => day.status === 'yes').length,
+    yesLast7: history7.filter(
+      (day) => day.status === 'yes' || day.status === 'mixed',
+    ).length,
     yesLast30,
     missedLast7: history7.filter((day) => day.status === 'missed').length,
     missedLast30: history30.filter((day) => day.status === 'missed').length,
     daysSinceLastYes: lastYes ? daysBetween(lastYes, today) : null,
     checkInRateLast7: percent(answeredLast7, nonPendingLast7),
+    bowelMovementCountLast30,
     bowelMovementDaysLast30: yesLast30,
-    averagePerWeekLast30: roundedOneDecimal((yesLast30 / 30) * 7),
+    averageBowelMovementsPerWeekLast30,
     currentGapDays: lastYes ? daysBetween(lastYes, today) : null,
     longestGapDays: gapSummary.longestGapDays,
     gapCount2Plus: gapSummary.gapCount2Plus,
@@ -321,29 +343,13 @@ export function summarizeTrends(
     checkInRateLast30: percent(answeredLast30, nonPendingLast30),
     bristolDistribution,
     mostCommonBristolType: findMostCommonBristolType(bristolDistribution),
-    hardOrLumpyDays: detailEntries.filter(
-      (entry) =>
-        entry.hadBowelMovement &&
-        entry.stoolType !== null &&
-        entry.stoolType <= 2,
-    ).length,
-    looseOrWateryDays: detailEntries.filter(
-      (entry) =>
-        entry.hadBowelMovement &&
-        entry.stoolType !== null &&
-        entry.stoolType >= 6,
-    ).length,
+    hardOrLumpyMovementsLast30,
+    looseOrWateryMovementsLast30,
     symptomCounts,
-    symptomBurdenDays: detailEntries.filter(
-      (entry) =>
-        entry.symptoms.straining ||
-        entry.symptoms.pain ||
-        entry.symptoms.bloating ||
-        entry.symptoms.incompleteEvacuation,
-    ).length,
-    laxativeUseDays: detailEntries.filter((entry) => entry.laxativeUsed).length,
-    noteDays: detailEntries.filter((entry) => entry.laxativeNote.trim()).length,
-    detailDays: detailEntries.length,
+    symptomBurdenEntriesLast30,
+    laxativeUseEntriesLast30,
+    noteEntriesLast30,
+    detailEntriesLast30: detailEntries.length,
     weeklyFrequency: buildWeeklyFrequency(chronological30),
     rolling7: buildRolling7(chronological30),
     intervals: buildIntervals(chronological30),

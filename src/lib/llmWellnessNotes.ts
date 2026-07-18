@@ -2,16 +2,17 @@ import type { Profile, TrendSummary } from '../types';
 
 export type LlmWellnessNotePayload = {
   summaryWindowDays: 30;
+  bowelMovementCountLast30: number;
   bowelMovementDaysLast30: number;
-  averagePerWeekLast30: number;
+  averageBowelMovementsPerWeekLast30: number;
   currentGapDays: number | null;
   longestGapDays: number;
-  hardOrLumpyDays: number;
-  looseOrWateryDays: number;
-  symptomBurdenDays: number;
-  laxativeUseDays: number;
+  hardOrLumpyMovementsLast30: number;
+  looseOrWateryMovementsLast30: number;
+  symptomBurdenEntriesLast30: number;
+  laxativeUseEntriesLast30: number;
   checkInRateLast30: number;
-  detailDays: number;
+  detailEntriesLast30: number;
 };
 
 export type WellnessNoteDisplayState =
@@ -39,16 +40,18 @@ export function buildLlmWellnessNotePayload(
 ): LlmWellnessNotePayload {
   return {
     summaryWindowDays: 30,
+    bowelMovementCountLast30: trends.bowelMovementCountLast30,
     bowelMovementDaysLast30: trends.bowelMovementDaysLast30,
-    averagePerWeekLast30: trends.averagePerWeekLast30,
+    averageBowelMovementsPerWeekLast30:
+      trends.averageBowelMovementsPerWeekLast30,
     currentGapDays: trends.currentGapDays,
     longestGapDays: trends.longestGapDays,
-    hardOrLumpyDays: trends.hardOrLumpyDays,
-    looseOrWateryDays: trends.looseOrWateryDays,
-    symptomBurdenDays: trends.symptomBurdenDays,
-    laxativeUseDays: trends.laxativeUseDays,
+    hardOrLumpyMovementsLast30: trends.hardOrLumpyMovementsLast30,
+    looseOrWateryMovementsLast30: trends.looseOrWateryMovementsLast30,
+    symptomBurdenEntriesLast30: trends.symptomBurdenEntriesLast30,
+    laxativeUseEntriesLast30: trends.laxativeUseEntriesLast30,
     checkInRateLast30: trends.checkInRateLast30,
-    detailDays: trends.detailDays,
+    detailEntriesLast30: trends.detailEntriesLast30,
   };
 }
 

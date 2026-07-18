@@ -24,16 +24,17 @@ const profile: Profile = {
 
 const summary: LlmWellnessNotePayload = {
   summaryWindowDays: 30,
+  bowelMovementCountLast30: 12,
   bowelMovementDaysLast30: 10,
-  averagePerWeekLast30: 2.3,
+  averageBowelMovementsPerWeekLast30: 2.8,
   currentGapDays: 2,
   longestGapDays: 4,
-  hardOrLumpyDays: 3,
-  looseOrWateryDays: 1,
-  symptomBurdenDays: 6,
-  laxativeUseDays: 2,
+  hardOrLumpyMovementsLast30: 3,
+  looseOrWateryMovementsLast30: 1,
+  symptomBurdenEntriesLast30: 6,
+  laxativeUseEntriesLast30: 2,
   checkInRateLast30: 87,
-  detailDays: 12,
+  detailEntriesLast30: 12,
 };
 
 describe('LLM wellness question helpers', () => {

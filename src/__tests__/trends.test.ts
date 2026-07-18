@@ -69,7 +69,7 @@ describe('trend helpers', () => {
     expect(trends.checkInRateLast7).toBe(43);
     expect(trends.bowelMovementDaysLast30).toBe(2);
     expect(trends.completedDaysLast30).toBe(3);
-    expect(trends.detailDays).toBe(0);
+    expect(trends.detailEntriesLast30).toBe(0);
   });
 
   it('keeps today pending until the missed-check-in cutoff passes', () => {
@@ -90,6 +90,39 @@ describe('trend helpers', () => {
     });
 
     expect(today.status).toBe('missed');
+  });
+
+  it('keeps every event on a mixed day in chronological order', () => {
+    const firstNo = {
+      ...richEntry('2026-07-05', { hadBowelMovement: false }),
+      id: 'first-no',
+      checkedInAt: '2026-07-05T08:00:00.000Z',
+    };
+    const yes = {
+      ...richEntry('2026-07-05', {
+        hadBowelMovement: true,
+        stoolType: 4,
+      }),
+      id: 'yes-last',
+      checkedInAt: '2026-07-05T18:00:00.000Z',
+    };
+    const secondNo = {
+      ...richEntry('2026-07-05', { hadBowelMovement: false }),
+      id: 'second-no',
+      checkedInAt: '2026-07-05T13:00:00.000Z',
+    };
+
+    const [day] = buildHistoryDays([yes, secondNo, firstNo], {
+      days: 1,
+      today: '2026-07-05',
+    });
+
+    expect(day.status).toBe('mixed');
+    expect(day.entries.map(({ id }) => id)).toEqual([
+      'first-no',
+      'second-no',
+      'yes-last',
+    ]);
   });
 
   it('summarizes Bristol, symptom, laxative, and note detail metrics', () => {
@@ -136,18 +169,78 @@ describe('trend helpers', () => {
       { type: 7, count: 0 },
     ]);
     expect(trends.mostCommonBristolType).toBe(2);
-    expect(trends.hardOrLumpyDays).toBe(2);
-    expect(trends.looseOrWateryDays).toBe(1);
+    expect(trends.hardOrLumpyMovementsLast30).toBe(2);
+    expect(trends.looseOrWateryMovementsLast30).toBe(1);
     expect(trends.symptomCounts).toEqual({
       straining: 2,
       pain: 1,
       bloating: 1,
       incompleteEvacuation: 1,
     });
-    expect(trends.symptomBurdenDays).toBe(4);
-    expect(trends.laxativeUseDays).toBe(2);
-    expect(trends.noteDays).toBe(2);
-    expect(trends.detailDays).toBe(5);
+    expect(trends.symptomBurdenEntriesLast30).toBe(4);
+    expect(trends.laxativeUseEntriesLast30).toBe(2);
+    expect(trends.noteEntriesLast30).toBe(2);
+    expect(trends.detailEntriesLast30).toBe(5);
+  });
+
+  it('counts duplicate-date movements as events while day metrics stay deduplicated', () => {
+    const earlyYes = {
+      ...richEntry('2026-07-05', {
+        hadBowelMovement: true,
+        stoolType: 2,
+        symptoms: { straining: true },
+      }),
+      id: 'early-yes',
+      checkedInAt: '2026-07-05T08:00:00.000Z',
+    };
+    const no = {
+      ...richEntry('2026-07-05', {
+        hadBowelMovement: false,
+        symptoms: { bloating: true },
+        laxativeUsed: true,
+        laxativeNote: 'PEG',
+      }),
+      id: 'middle-no',
+      checkedInAt: '2026-07-05T13:00:00.000Z',
+    };
+    const lateYes = {
+      ...richEntry('2026-07-05', {
+        hadBowelMovement: true,
+        stoolType: 6,
+      }),
+      id: 'late-yes',
+      checkedInAt: '2026-07-05T18:00:00.000Z',
+    };
+
+    const trends = summarizeTrends([lateYes, no, earlyYes], {
+      today: '2026-07-05',
+    });
+
+    expect(trends.yesLast30).toBe(1);
+    expect(trends.bowelMovementDaysLast30).toBe(1);
+    expect(trends.bowelMovementCountLast30).toBe(2);
+    expect(trends.completedDaysLast30).toBe(1);
+    expect(trends.averageBowelMovementsPerWeekLast30).toBe(0.5);
+    expect(trends.hardOrLumpyMovementsLast30).toBe(1);
+    expect(trends.looseOrWateryMovementsLast30).toBe(1);
+    expect(trends.symptomBurdenEntriesLast30).toBe(2);
+    expect(trends.laxativeUseEntriesLast30).toBe(1);
+    expect(trends.noteEntriesLast30).toBe(1);
+    expect(trends.detailEntriesLast30).toBe(3);
+    expect(trends.weeklyFrequency.at(-1)?.count).toBe(2);
+    expect(trends.rolling7.at(-1)?.count).toBe(2);
+    expect(trends.intervals).toEqual([
+      {
+        localDate: '2026-07-05',
+        label: 'Today',
+        daysSincePrevious: null,
+      },
+      {
+        localDate: '2026-07-05',
+        label: 'Today',
+        daysSincePrevious: 0,
+      },
+    ]);
   });
 
   it('calculates gaps, weekly bars, rolling series, and intervals', () => {
@@ -167,7 +260,7 @@ describe('trend helpers', () => {
     expect(trends.currentGapDays).toBe(2);
     expect(trends.longestGapDays).toBe(4);
     expect(trends.gapCount2Plus).toBe(2);
-    expect(trends.averagePerWeekLast30).toBe(0.7);
+    expect(trends.averageBowelMovementsPerWeekLast30).toBe(0.7);
     expect(trends.weeklyFrequency.length).toBeGreaterThanOrEqual(4);
     expect(trends.rolling7).toHaveLength(30);
     expect(trends.rolling7[29]).toEqual({
