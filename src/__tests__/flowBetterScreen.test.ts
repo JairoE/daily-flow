@@ -163,7 +163,7 @@ function dailyEntry(
 describe('Flow Better screen', () => {
   beforeAll(() => {
     jest.useFakeTimers();
-    jest.setSystemTime(new Date('2026-07-17T16:00:00.000Z'));
+    jest.setSystemTime(new Date(2026, 6, 17, 12));
     consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation((...args) => {
       if (!String(args[0]).includes('SafeAreaView has been deprecated')) {
         originalConsoleWarn(...args);

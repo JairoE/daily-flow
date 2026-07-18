@@ -96,7 +96,7 @@ function record(
 describe('multi-entry notification synchronization', () => {
   beforeAll(() => {
     jest.useFakeTimers();
-    jest.setSystemTime(new Date('2026-07-17T16:00:00.000Z'));
+    jest.setSystemTime(new Date(2026, 6, 17, 12));
   });
 
   afterAll(() => {
@@ -154,7 +154,7 @@ describe('multi-entry notification synchronization', () => {
     expect(mockScheduleNotificationAsync).not.toHaveBeenCalled();
   });
 
-  it('restores an upcoming missed reminder after todays final event is deleted', async () => {
+  it("restores an upcoming missed reminder after today's final event is deleted", async () => {
     mockGetEntriesByDate.mockResolvedValueOnce([]);
     mockGetNotificationRecord.mockImplementation(
       async (localDate: string, type: NotificationType) =>
@@ -176,12 +176,15 @@ describe('multi-entry notification synchronization', () => {
         type: 'missed_checkin',
       }),
     );
-    expect(mockScheduleNotificationAsync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        trigger: expect.objectContaining({
-          date: new Date('2026-07-18T02:00:00.000Z'),
-        }),
-      }),
-    );
+    const scheduledRequest = mockScheduleNotificationAsync.mock.calls[0][0];
+    const fireDate = scheduledRequest.trigger?.date as Date;
+    expect(fireDate).toBeInstanceOf(Date);
+    expect([
+      fireDate.getFullYear(),
+      fireDate.getMonth(),
+      fireDate.getDate(),
+      fireDate.getHours(),
+      fireDate.getMinutes(),
+    ]).toEqual([2026, 6, 17, 22, 0]);
   });
 });
