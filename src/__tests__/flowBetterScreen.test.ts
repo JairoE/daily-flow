@@ -122,6 +122,15 @@ function dailyEntry(
 }
 
 describe('Flow Better screen', () => {
+  beforeAll(() => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-17T16:00:00.000Z'));
+  });
+
+  afterAll(() => {
+    jest.useRealTimers();
+  });
+
   beforeEach(() => {
     mockRequestLlmWellnessAnswer.mockReset();
   });
