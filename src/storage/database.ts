@@ -211,15 +211,20 @@ function createEntryId(localDate: string, now: string): string {
   return `entry-${localDate}-${now}-${sequence}-${entropy}`;
 }
 
-async function migrateDailyEntryColumns(db: SQLite.SQLiteDatabase) {
-  const columns = await db.getAllAsync<{ name: string }>(
+type DailyEntryMigrationExecutor = Pick<
+  SQLite.SQLiteDatabase,
+  'execAsync' | 'getAllAsync'
+>;
+
+async function migrateDailyEntryColumns(executor: DailyEntryMigrationExecutor) {
+  const columns = await executor.getAllAsync<{ name: string }>(
     'PRAGMA table_info(daily_entries)',
   );
   const existingColumns = new Set(columns.map((column) => column.name));
 
   for (const migration of dailyEntryMigrations) {
     if (!existingColumns.has(migration.name)) {
-      await db.execAsync(migration.sql);
+      await executor.execAsync(migration.sql);
     }
   }
 }
@@ -313,11 +318,13 @@ export async function migrateDailyEntriesForMultipleEvents(
     /\blocal_date\s+TEXT\s+NOT\s+NULL\s+UNIQUE\b/i.test(table?.sql ?? '');
 
   if (!hasLegacyUniqueDate) {
+    await migrateDailyEntryColumns(db);
     await db.execAsync(dailyEntryDateTimeIndexSql);
     return false;
   }
 
   await db.withExclusiveTransactionAsync(async (transaction) => {
+    await migrateDailyEntryColumns(transaction);
     await transaction.execAsync(rebuildDailyEntriesSql);
   });
 
@@ -329,7 +336,6 @@ async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
     dbPromise = SQLite.openDatabaseAsync('daily-flow.db').then(async (db) => {
       await db.execAsync(schema);
       await migrateProfileColumns(db);
-      await migrateDailyEntryColumns(db);
       await migrateDailyEntriesForMultipleEvents(db);
       return db;
     });
