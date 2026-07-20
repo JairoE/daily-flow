@@ -82,6 +82,10 @@ import {
   formatWellnessQuestionAskedAt,
 } from './src/lib/questionHistory';
 import {
+  createQuestionHistoryWriteCoordinator,
+  type QuestionHistoryWriteCoordinator,
+} from './src/lib/questionHistoryWriteCoordinator';
+import {
   flowBetterTab,
   primaryTabs,
   resolveAccessibleTab,
@@ -154,6 +158,16 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('today');
   const [notice, setNotice] = useState('');
   const [noticeKey, setNoticeKey] = useState(0);
+  const questionHistoryWriteCoordinatorRef =
+    useRef<QuestionHistoryWriteCoordinator | null>(null);
+
+  if (!questionHistoryWriteCoordinatorRef.current) {
+    questionHistoryWriteCoordinatorRef.current =
+      createQuestionHistoryWriteCoordinator();
+  }
+
+  const questionHistoryWriteCoordinator =
+    questionHistoryWriteCoordinatorRef.current;
 
   const today = getLocalDateKey();
   const includeTodayAsMissed = profile
@@ -414,6 +428,7 @@ export default function App() {
   }
 
   async function clearLocalData() {
+    await questionHistoryWriteCoordinator.invalidateAndDrain();
     await deleteAllData();
     setProfile(null);
     setEntries([]);
@@ -584,6 +599,7 @@ export default function App() {
 
           {activeTab === 'flow-better' ? (
             <FlowBetterScreen
+              historyWriteCoordinator={questionHistoryWriteCoordinator}
               localDate={today}
               profile={profile}
               trends={trends}
@@ -1165,10 +1181,12 @@ function TodayLogs({ entries }: { entries: DailyEntry[] }) {
 }
 
 export function FlowBetterScreen({
+  historyWriteCoordinator,
   localDate,
   profile,
   trends,
 }: {
+  historyWriteCoordinator?: QuestionHistoryWriteCoordinator;
   localDate: string;
   profile: Profile;
   trends: TrendSummary;
@@ -1186,6 +1204,16 @@ export function FlowBetterScreen({
   >([]);
   const [historyLoadError, setHistoryLoadError] = useState('');
   const [historySaveError, setHistorySaveError] = useState('');
+  const localHistoryWriteCoordinatorRef =
+    useRef<QuestionHistoryWriteCoordinator | null>(null);
+
+  if (!historyWriteCoordinator && !localHistoryWriteCoordinatorRef.current) {
+    localHistoryWriteCoordinatorRef.current =
+      createQuestionHistoryWriteCoordinator();
+  }
+
+  const activeHistoryWriteCoordinator =
+    historyWriteCoordinator ?? localHistoryWriteCoordinatorRef.current!;
 
   useEffect(() => {
     let cancelled = false;
@@ -1249,6 +1277,9 @@ export function FlowBetterScreen({
       return;
     }
 
+    const submissionToken =
+      activeHistoryWriteCoordinator.issueSubmissionToken();
+
     setAsking(true);
     setAnswer('');
     setQuestionError('');
@@ -1261,18 +1292,28 @@ export function FlowBetterScreen({
       );
 
       if (result.ok) {
+        const writeResult = await activeHistoryWriteCoordinator.enqueueWrite(
+          submissionToken,
+          () =>
+            createWellnessQuestionHistoryEntry(
+              submittedQuestion,
+              result.answer,
+            ),
+        );
+
+        if (writeResult.status === 'stale') {
+          return;
+        }
+
         setAnswer(result.answer);
 
-        try {
-          const savedEntry = await createWellnessQuestionHistoryEntry(
-            submittedQuestion,
-            result.answer,
-          );
+        if (writeResult.status === 'written') {
+          const savedEntry = writeResult.value;
           setQuestionHistory((current) =>
             mergeWellnessQuestionHistoryEntries(current, [savedEntry]),
           );
           setHistorySaveError('');
-        } catch {
+        } else {
           setHistorySaveError(
             'Answer received, but it could not be added to question history.',
           );

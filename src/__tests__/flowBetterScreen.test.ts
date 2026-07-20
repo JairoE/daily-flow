@@ -51,6 +51,7 @@ import {
 import {
   createDailyEntry,
   createWellnessQuestionHistoryEntry,
+  deleteAllData,
   getEntries,
   getProfile,
   getWellnessQuestionHistory,
@@ -84,6 +85,9 @@ const mockSyncNotificationsAfterEntry =
   >;
 const mockCreateDailyEntry = createDailyEntry as jest.MockedFunction<
   typeof createDailyEntry
+>;
+const mockDeleteAllData = deleteAllData as jest.MockedFunction<
+  typeof deleteAllData
 >;
 const mockGetEntries = getEntries as jest.MockedFunction<typeof getEntries>;
 const mockGetProfile = getProfile as jest.MockedFunction<typeof getProfile>;
@@ -227,11 +231,13 @@ describe('Flow Better screen', () => {
     mockSyncNotificationsAfterEntry.mockReset();
     mockCreateDailyEntry.mockReset();
     mockCreateWellnessQuestionHistoryEntry.mockReset();
+    mockDeleteAllData.mockReset();
     mockGetEntries.mockReset();
     mockGetProfile.mockReset();
     mockGetWellnessQuestionHistory.mockReset();
     mockInitializeStorage.mockReset();
     mockGetWellnessQuestionHistory.mockResolvedValue([]);
+    mockDeleteAllData.mockResolvedValue(undefined);
     mockCreateWellnessQuestionHistoryEntry.mockImplementation(
       async (question, answer) => ({
         id: 'saved-history',
@@ -1130,6 +1136,75 @@ describe('Flow Better screen', () => {
       expect.stringContaining('question history'),
       expect.any(Array),
     );
+    alertSpy.mockRestore();
+  });
+
+  it('does not recreate question history when a deferred answer resolves after local data deletion', async () => {
+    let resolveAnswer: (
+      result: Awaited<ReturnType<typeof requestLlmWellnessAnswer>>,
+    ) => void = () => undefined;
+    mockRequestLlmWellnessAnswer.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveAnswer = resolve;
+        }),
+    );
+    mockInitializeStorage.mockResolvedValue(undefined);
+    mockConfigureNotificationBehavior.mockResolvedValue(undefined);
+    mockGetProfile.mockResolvedValue({
+      ...profile,
+      llmWellnessNotesEnabled: true,
+      llmWellnessNoteEndpoint: 'https://example.ngrok.app/wellness-note',
+      llmWellnessNoteAccessToken: 'test-token',
+      dailyOpenLoveShownDate: '2026-07-17',
+    });
+    mockGetEntries.mockResolvedValue([]);
+    mockRescheduleProfileNotifications.mockResolvedValue(true);
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(
+      (_title, _message, buttons) => {
+        buttons?.find((button) => button.style === 'destructive')?.onPress?.();
+      },
+    );
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(createElement(App));
+      await flushMicrotasks();
+    });
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Open Flow better ✨ tab',
+      }).props.onPress();
+    });
+    act(() => {
+      renderer!.root
+        .findByType(TextInput)
+        .props.onChangeText('Will this answer stay deleted?');
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }).props.onPress();
+      await Promise.resolve();
+    });
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Open Settings tab',
+      }).props.onPress();
+    });
+    await act(async () => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Delete local data',
+      }).props.onPress();
+      await flushMicrotasks();
+    });
+
+    expect(mockDeleteAllData).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveAnswer({ ok: true, answer: 'A late sensitive answer.' });
+      await flushMicrotasks();
+    });
+
+    expect(mockCreateWellnessQuestionHistoryEntry).not.toHaveBeenCalled();
     alertSpy.mockRestore();
   });
 });
