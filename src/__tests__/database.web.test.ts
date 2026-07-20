@@ -1,10 +1,12 @@
 import {
   createDailyEntry,
+  createWellnessQuestionHistoryEntry,
   deleteAllData,
   deleteDailyEntry,
   getAllEntries,
   getEntries,
   getEntriesByDate,
+  getWellnessQuestionHistory,
   updateDailyEntry,
 } from '../storage/database.web';
 
@@ -95,5 +97,43 @@ describe('web daily-entry storage', () => {
       secondLatest.id,
     ]);
     expect(await getAllEntries()).toHaveLength(3);
+  });
+
+  it('reads legacy state without question history as an empty collection', async () => {
+    window.localStorage.setItem(
+      'daily-flow-state-v1',
+      JSON.stringify({ profile: null, entries: [], notificationRecords: [] }),
+    );
+
+    await expect(getWellnessQuestionHistory()).resolves.toEqual([]);
+  });
+
+  it('persists successful question history newest first', async () => {
+    jest.useFakeTimers();
+    jest.setSystemTime(new Date('2026-07-20T15:00:00.000Z'));
+    const first = await createWellnessQuestionHistoryEntry(
+      '  First question?  ',
+      '  First answer.  ',
+    );
+    jest.setSystemTime(new Date('2026-07-20T16:00:00.000Z'));
+    const second = await createWellnessQuestionHistoryEntry(
+      'Second question?',
+      'Second answer.',
+    );
+    jest.useRealTimers();
+
+    expect(first).toMatchObject({
+      question: 'First question?',
+      answer: 'First answer.',
+      askedAt: '2026-07-20T15:00:00.000Z',
+    });
+    await expect(getWellnessQuestionHistory()).resolves.toEqual([second, first]);
+  });
+
+  it('clears question history with all other local data', async () => {
+    await createWellnessQuestionHistoryEntry('Question?', 'Answer.');
+    await deleteAllData();
+
+    await expect(getWellnessQuestionHistory()).resolves.toEqual([]);
   });
 });

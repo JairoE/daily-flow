@@ -6,8 +6,14 @@ import type {
   NotificationType,
   Profile,
   StoolType,
+  WellnessQuestionHistoryEntry,
 } from '../types';
 import { compareDailyEntries } from '../lib/dailyEntries';
+import {
+  compareWellnessQuestionHistoryEntries,
+  createWellnessQuestionHistoryValue,
+  normalizeWellnessQuestionHistory,
+} from '../lib/questionHistory';
 
 const PROFILE_ID = 'local-profile';
 const WEB_STORAGE_KEY = 'daily-flow-state-v1';
@@ -17,6 +23,7 @@ type WebState = {
   profile: Profile | null;
   entries: DailyEntry[];
   notificationRecords: NotificationRecord[];
+  questionHistory: WellnessQuestionHistoryEntry[];
 };
 
 function emptyState(): WebState {
@@ -24,6 +31,7 @@ function emptyState(): WebState {
     profile: null,
     entries: [],
     notificationRecords: [],
+    questionHistory: [],
   };
 }
 
@@ -146,6 +154,7 @@ function readState(): WebState {
       notificationRecords: Array.isArray(state.notificationRecords)
         ? state.notificationRecords
         : [],
+      questionHistory: normalizeWellnessQuestionHistory(state.questionHistory),
     };
   } catch {
     return emptyState();
@@ -299,6 +308,31 @@ export async function deleteDailyEntry(id: string): Promise<boolean> {
 
   writeState({ ...state, entries: nextEntries });
   return true;
+}
+
+export async function getWellnessQuestionHistory(): Promise<
+  WellnessQuestionHistoryEntry[]
+> {
+  return [...readState().questionHistory].sort(
+    compareWellnessQuestionHistoryEntries,
+  );
+}
+
+export async function createWellnessQuestionHistoryEntry(
+  question: string,
+  answer: string,
+): Promise<WellnessQuestionHistoryEntry> {
+  const entry = createWellnessQuestionHistoryValue(question, answer);
+  const state = readState();
+
+  writeState({
+    ...state,
+    questionHistory: [...state.questionHistory, entry].sort(
+      compareWellnessQuestionHistoryEntries,
+    ),
+  });
+
+  return entry;
 }
 
 export async function getNotificationRecords(): Promise<NotificationRecord[]> {
