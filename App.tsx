@@ -77,7 +77,10 @@ import {
   MAX_WELLNESS_QUESTION_CHARS,
   requestLlmWellnessAnswer,
 } from './src/lib/llmWellnessQuestions';
-import { formatWellnessQuestionAskedAt } from './src/lib/questionHistory';
+import {
+  compareWellnessQuestionHistoryEntries,
+  formatWellnessQuestionAskedAt,
+} from './src/lib/questionHistory';
 import {
   flowBetterTab,
   primaryTabs,
@@ -131,6 +134,17 @@ function withPersistedEntry(
     .filter((entry) => entry.id !== persistedEntry.id)
     .concat(persistedEntry)
     .sort(compareDailyEntries);
+}
+
+function mergeWellnessQuestionHistoryEntries(
+  baseline: WellnessQuestionHistoryEntry[],
+  overrides: WellnessQuestionHistoryEntry[],
+): WellnessQuestionHistoryEntry[] {
+  return [
+    ...new Map(
+      [...baseline, ...overrides].map((entry) => [entry.id, entry]),
+    ).values(),
+  ].sort(compareWellnessQuestionHistoryEntries);
 }
 
 export default function App() {
@@ -1170,7 +1184,8 @@ export function FlowBetterScreen({
   const [questionHistory, setQuestionHistory] = useState<
     WellnessQuestionHistoryEntry[]
   >([]);
-  const [historyError, setHistoryError] = useState('');
+  const [historyLoadError, setHistoryLoadError] = useState('');
+  const [historySaveError, setHistorySaveError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -1209,13 +1224,15 @@ export function FlowBetterScreen({
     getWellnessQuestionHistory()
       .then((entries) => {
         if (!cancelled) {
-          setQuestionHistory(entries);
-          setHistoryError('');
+          setQuestionHistory((current) =>
+            mergeWellnessQuestionHistoryEntries(entries, current),
+          );
+          setHistoryLoadError('');
         }
       })
       .catch(() => {
         if (!cancelled) {
-          setHistoryError('Question history is unavailable right now.');
+          setHistoryLoadError('Question history is unavailable right now.');
         }
       });
 
@@ -1251,13 +1268,12 @@ export function FlowBetterScreen({
             submittedQuestion,
             result.answer,
           );
-          setQuestionHistory((current) => [
-            savedEntry,
-            ...current.filter((entry) => entry.id !== savedEntry.id),
-          ]);
-          setHistoryError('');
+          setQuestionHistory((current) =>
+            mergeWellnessQuestionHistoryEntries(current, [savedEntry]),
+          );
+          setHistorySaveError('');
         } catch {
-          setHistoryError(
+          setHistorySaveError(
             'Answer received, but it could not be added to question history.',
           );
         }
@@ -1355,9 +1371,15 @@ export function FlowBetterScreen({
         <View style={styles.questionHistorySection}>
           <Text style={styles.sectionLabel}>Question history</Text>
 
-          {historyError ? (
+          {historyLoadError ? (
             <Text accessibilityLiveRegion="polite" style={styles.errorText}>
-              {historyError}
+              {historyLoadError}
+            </Text>
+          ) : null}
+
+          {historySaveError ? (
+            <Text accessibilityLiveRegion="polite" style={styles.errorText}>
+              {historySaveError}
             </Text>
           ) : null}
 

@@ -147,6 +147,22 @@ function renderedText(renderer: ReactTestRenderer): string {
   return JSON.stringify(renderer.toJSON());
 }
 
+function renderedQuestionHistoryIds(
+  renderer: ReactTestRenderer,
+): string[] {
+  return [
+    ...new Set(
+      renderer.root
+        .findAll(
+          (node) =>
+            typeof node.props.testID === 'string' &&
+            node.props.testID.startsWith('question-history-'),
+        )
+        .map((node) => node.props.testID as string),
+    ),
+  ];
+}
+
 async function flushMicrotasks() {
   for (let index = 0; index < 8; index += 1) {
     await Promise.resolve();
@@ -837,7 +853,67 @@ describe('Flow Better screen', () => {
     expect(text).toContain(formatWellnessQuestionAskedAt(newer.askedAt));
   });
 
+  it('keeps a newly saved answer when the initial history load resolves later', async () => {
+    const older = questionHistoryEntry(
+      'older',
+      'Older loaded question?',
+      'Older loaded answer.',
+      '2026-07-19T15:42:00',
+    );
+    let resolveHistory: (
+      entries: Awaited<ReturnType<typeof getWellnessQuestionHistory>>,
+    ) => void = () => undefined;
+    mockGetWellnessQuestionHistory.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveHistory = resolve;
+        }),
+    );
+    mockRequestLlmWellnessAnswer.mockResolvedValue({
+      ok: true,
+      answer: 'Newly saved answer.',
+    });
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(
+        createElement(FlowBetterScreen, {
+          localDate: '2026-07-20',
+          profile,
+          trends,
+        }),
+      );
+      await Promise.resolve();
+    });
+    act(() => {
+      renderer!.root
+        .findByType(TextInput)
+        .props.onChangeText('Newly saved question?');
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }).props.onPress();
+      await flushMicrotasks();
+    });
+
+    await act(async () => {
+      resolveHistory([older]);
+      await flushMicrotasks();
+    });
+
+    expect(renderedQuestionHistoryIds(renderer!)).toEqual([
+      'question-history-saved-history',
+      'question-history-older',
+    ]);
+  });
+
   it('persists and prepends a successful submitted question and answer', async () => {
+    const existing = questionHistoryEntry(
+      'existing',
+      'Existing question?',
+      'Existing answer.',
+      '2026-07-19T15:42:00',
+    );
+    mockGetWellnessQuestionHistory.mockResolvedValue([existing]);
     mockRequestLlmWellnessAnswer.mockResolvedValue({
       ok: true,
       answer: 'A saved answer.',
@@ -868,8 +944,14 @@ describe('Flow Better screen', () => {
       'What can help?',
       'A saved answer.',
     );
-    expect(renderedText(renderer!)).toContain('A saved answer.');
-    expect(renderedText(renderer!)).toContain('What can help?');
+    const text = renderedText(renderer!);
+    expect(text).toContain('A saved answer.');
+    expect(text).toContain('What can help?');
+    expect(text).toContain('Existing question?');
+    expect(renderedQuestionHistoryIds(renderer!)).toEqual([
+      'question-history-saved-history',
+      'question-history-existing',
+    ]);
   });
 
   it('does not persist a failed answer request', async () => {
@@ -921,6 +1003,40 @@ describe('Flow Better screen', () => {
     expect(renderedText(renderer!)).toContain(
       'Question history is unavailable right now.',
     );
+    expect(
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }),
+    ).toBeTruthy();
+  });
+
+  it('keeps the load warning visible after a successful history save', async () => {
+    mockGetWellnessQuestionHistory.mockRejectedValue(new Error('storage down'));
+    mockRequestLlmWellnessAnswer.mockResolvedValue({
+      ok: true,
+      answer: 'A newly saved answer.',
+    });
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(
+        createElement(FlowBetterScreen, {
+          localDate: '2026-07-20',
+          profile,
+          trends,
+        }),
+      );
+      await flushMicrotasks();
+    });
+    act(() => {
+      renderer!.root.findByType(TextInput).props.onChangeText('Question?');
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }).props.onPress();
+      await flushMicrotasks();
+    });
+
+    const text = renderedText(renderer!);
+    expect(text).toContain('A newly saved answer.');
+    expect(text).toContain('Question history is unavailable right now.');
     expect(
       renderer!.root.findByProps({ accessibilityLabel: 'Ask' }),
     ).toBeTruthy();
@@ -978,5 +1094,42 @@ describe('Flow Better screen', () => {
     expect(renderedText(renderer!)).toContain(
       'Successful questions and answers stay on this device until you delete local data.',
     );
+  });
+
+  it('includes question history in the delete local data confirmation', async () => {
+    mockInitializeStorage.mockResolvedValue(undefined);
+    mockConfigureNotificationBehavior.mockResolvedValue(undefined);
+    mockGetProfile.mockResolvedValue({
+      ...profile,
+      dailyOpenLoveShownDate: '2026-07-17',
+    });
+    mockGetEntries.mockResolvedValue([]);
+    mockRescheduleProfileNotifications.mockResolvedValue(true);
+    const alertSpy = jest
+      .spyOn(Alert, 'alert')
+      .mockImplementation(() => undefined);
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(createElement(App));
+      await flushMicrotasks();
+    });
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Open Settings tab',
+      }).props.onPress();
+    });
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Delete local data',
+      }).props.onPress();
+    });
+
+    expect(alertSpy).toHaveBeenCalledWith(
+      'Delete local data?',
+      expect.stringContaining('question history'),
+      expect.any(Array),
+    );
+    alertSpy.mockRestore();
   });
 });
