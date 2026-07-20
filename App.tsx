@@ -29,11 +29,13 @@ import { exportEntriesCsv } from './src/services/exportEntries';
 import {
   createProfile,
   createDailyEntry,
+  createWellnessQuestionHistoryEntry,
   deleteAllData,
   deleteDailyEntry,
   getAllEntries,
   getEntries,
   getProfile,
+  getWellnessQuestionHistory,
   initializeStorage,
   saveProfile,
   updateDailyEntry,
@@ -76,6 +78,14 @@ import {
   requestLlmWellnessAnswer,
 } from './src/lib/llmWellnessQuestions';
 import {
+  compareWellnessQuestionHistoryEntries,
+  formatWellnessQuestionAskedAt,
+} from './src/lib/questionHistory';
+import {
+  createQuestionHistoryWriteCoordinator,
+  type QuestionHistoryWriteCoordinator,
+} from './src/lib/questionHistoryWriteCoordinator';
+import {
   flowBetterTab,
   primaryTabs,
   resolveAccessibleTab,
@@ -91,6 +101,7 @@ import type {
   StoolType,
   TabKey,
   TrendSummary,
+  WellnessQuestionHistoryEntry,
 } from './src/types';
 
 const entryLoadLimit = 90;
@@ -129,6 +140,17 @@ function withPersistedEntry(
     .sort(compareDailyEntries);
 }
 
+function mergeWellnessQuestionHistoryEntries(
+  baseline: WellnessQuestionHistoryEntry[],
+  overrides: WellnessQuestionHistoryEntry[],
+): WellnessQuestionHistoryEntry[] {
+  return [
+    ...new Map(
+      [...baseline, ...overrides].map((entry) => [entry.id, entry]),
+    ).values(),
+  ].sort(compareWellnessQuestionHistoryEntries);
+}
+
 export default function App() {
   const [ready, setReady] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -136,6 +158,16 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('today');
   const [notice, setNotice] = useState('');
   const [noticeKey, setNoticeKey] = useState(0);
+  const questionHistoryWriteCoordinatorRef =
+    useRef<QuestionHistoryWriteCoordinator | null>(null);
+
+  if (!questionHistoryWriteCoordinatorRef.current) {
+    questionHistoryWriteCoordinatorRef.current =
+      createQuestionHistoryWriteCoordinator();
+  }
+
+  const questionHistoryWriteCoordinator =
+    questionHistoryWriteCoordinatorRef.current;
 
   const today = getLocalDateKey();
   const includeTodayAsMissed = profile
@@ -396,17 +428,23 @@ export default function App() {
   }
 
   async function clearLocalData() {
-    await deleteAllData();
-    setProfile(null);
-    setEntries([]);
-    setActiveTab('today');
-    setNotice('');
+    await questionHistoryWriteCoordinator.invalidateAndDrain();
+
+    try {
+      await deleteAllData();
+      setProfile(null);
+      setEntries([]);
+      setActiveTab('today');
+      setNotice('');
+    } finally {
+      questionHistoryWriteCoordinator.reopen();
+    }
   }
 
   function handleDeleteData() {
     Alert.alert(
       'Delete local data?',
-      'This removes your profile, check-ins, and reminder records from this device.',
+      'This removes your profile, check-ins, question history, and reminder records from this device.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -566,6 +604,7 @@ export default function App() {
 
           {activeTab === 'flow-better' ? (
             <FlowBetterScreen
+              historyWriteCoordinator={questionHistoryWriteCoordinator}
               localDate={today}
               profile={profile}
               trends={trends}
@@ -1147,10 +1186,12 @@ function TodayLogs({ entries }: { entries: DailyEntry[] }) {
 }
 
 export function FlowBetterScreen({
+  historyWriteCoordinator,
   localDate,
   profile,
   trends,
 }: {
+  historyWriteCoordinator?: QuestionHistoryWriteCoordinator;
   localDate: string;
   profile: Profile;
   trends: TrendSummary;
@@ -1163,6 +1204,21 @@ export function FlowBetterScreen({
   const [answer, setAnswer] = useState('');
   const [questionError, setQuestionError] = useState('');
   const [asking, setAsking] = useState(false);
+  const [questionHistory, setQuestionHistory] = useState<
+    WellnessQuestionHistoryEntry[]
+  >([]);
+  const [historyLoadError, setHistoryLoadError] = useState('');
+  const [historySaveError, setHistorySaveError] = useState('');
+  const localHistoryWriteCoordinatorRef =
+    useRef<QuestionHistoryWriteCoordinator | null>(null);
+
+  if (!historyWriteCoordinator && !localHistoryWriteCoordinatorRef.current) {
+    localHistoryWriteCoordinatorRef.current =
+      createQuestionHistoryWriteCoordinator();
+  }
+
+  const activeHistoryWriteCoordinator =
+    historyWriteCoordinator ?? localHistoryWriteCoordinatorRef.current!;
 
   useEffect(() => {
     let cancelled = false;
@@ -1195,6 +1251,29 @@ export function FlowBetterScreen({
     trends,
   ]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    getWellnessQuestionHistory()
+      .then((entries) => {
+        if (!cancelled) {
+          setQuestionHistory((current) =>
+            mergeWellnessQuestionHistoryEntries(entries, current),
+          );
+          setHistoryLoadError('');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHistoryLoadError('Question history is unavailable right now.');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function handleAskQuestion() {
     const submittedQuestion = question.trim();
 
@@ -1203,9 +1282,14 @@ export function FlowBetterScreen({
       return;
     }
 
+    const submissionToken =
+      activeHistoryWriteCoordinator.issueSubmissionToken();
+
     setAsking(true);
     setAnswer('');
     setQuestionError('');
+
+    let answerDisplayedBeforePersistence = false;
 
     try {
       const result = await requestLlmWellnessAnswer(
@@ -1215,7 +1299,41 @@ export function FlowBetterScreen({
       );
 
       if (result.ok) {
+        if (
+          !activeHistoryWriteCoordinator.isSubmissionCurrent(submissionToken)
+        ) {
+          return;
+        }
+
         setAnswer(result.answer);
+        setAsking(false);
+        answerDisplayedBeforePersistence = true;
+
+        const writeResult = await activeHistoryWriteCoordinator.enqueueWrite(
+          submissionToken,
+          () =>
+            createWellnessQuestionHistoryEntry(
+              submittedQuestion,
+              result.answer,
+            ),
+        );
+
+        if (writeResult.status === 'stale') {
+          return;
+        }
+
+        if (writeResult.status === 'written') {
+          const savedEntry = writeResult.value;
+          setQuestionHistory((current) =>
+            mergeWellnessQuestionHistoryEntries(current, [savedEntry]),
+          );
+          setHistorySaveError('');
+        } else {
+          setHistorySaveError(
+            'Answer received, but it could not be added to question history.',
+          );
+        }
+
         return;
       }
 
@@ -1229,7 +1347,9 @@ export function FlowBetterScreen({
         setQuestionError('Unable to answer right now. Please try again.');
       }
     } finally {
-      setAsking(false);
+      if (!answerDisplayedBeforePersistence) {
+        setAsking(false);
+      }
     }
   }
 
@@ -1305,6 +1425,44 @@ export function FlowBetterScreen({
             <Text style={styles.bodyText}>{answer}</Text>
           </View>
         ) : null}
+
+        <View style={styles.questionHistorySection}>
+          <Text style={styles.sectionLabel}>Question history</Text>
+
+          {historyLoadError ? (
+            <Text accessibilityLiveRegion="polite" style={styles.errorText}>
+              {historyLoadError}
+            </Text>
+          ) : null}
+
+          {historySaveError ? (
+            <Text accessibilityLiveRegion="polite" style={styles.errorText}>
+              {historySaveError}
+            </Text>
+          ) : null}
+
+          {questionHistory.length === 0 ? (
+            <Text style={styles.bodyText}>
+              Successful answers you ask for will appear here on this device.
+            </Text>
+          ) : (
+            questionHistory.map((entry) => (
+              <View
+                key={entry.id}
+                style={styles.questionHistoryCard}
+                testID={`question-history-${entry.id}`}
+              >
+                <Text style={styles.questionHistoryTime}>
+                  {formatWellnessQuestionAskedAt(entry.askedAt)}
+                </Text>
+                <Text style={styles.questionHistoryLabel}>You asked</Text>
+                <Text style={styles.bodyText}>{entry.question}</Text>
+                <Text style={styles.questionHistoryLabel}>Answer</Text>
+                <Text style={styles.bodyText}>{entry.answer}</Text>
+              </View>
+            ))
+          )}
+        </View>
       </View>
     </View>
   );
@@ -2499,7 +2657,7 @@ function EmptyChart() {
   return <Text style={styles.chartEmptyText}>More check-ins will fill this in.</Text>;
 }
 
-function SettingsScreen({
+export function SettingsScreen({
   profile,
   onSave,
   onExportData,
@@ -2630,6 +2788,8 @@ function SettingsScreen({
           Data is stored locally on this device. Private reminders hide bowel
           movement wording from notification text. Daily Flow Pro+ sends summary
           counts and any question you choose to submit to your configured proxy.
+          Successful questions and answers stay on this device until you delete
+          local data.
         </Text>
       </View>
 
@@ -3226,6 +3386,31 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     marginTop: 18,
     paddingTop: 16,
+  },
+  questionHistorySection: {
+    borderTopColor: palette.border,
+    borderTopWidth: 1,
+    gap: 12,
+    marginTop: 20,
+    paddingTop: 18,
+  },
+  questionHistoryCard: {
+    backgroundColor: palette.tile,
+    borderRadius: 18,
+    gap: 6,
+    padding: 14,
+  },
+  questionHistoryTime: {
+    color: palette.softText,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  questionHistoryLabel: {
+    color: palette.purple,
+    fontSize: 13,
+    fontWeight: '900',
+    marginTop: 4,
+    textTransform: 'uppercase',
   },
   kicker: {
     color: palette.purple,

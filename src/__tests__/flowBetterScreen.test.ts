@@ -1,6 +1,6 @@
 import { createElement } from 'react';
 import { act, create, type ReactTestRenderer } from 'react-test-renderer';
-import { Alert, TextInput } from 'react-native';
+import { Alert, Text, TextInput } from 'react-native';
 
 jest.mock('../services/notifications', () => ({
   configureNotificationBehavior: jest.fn(),
@@ -14,12 +14,14 @@ jest.mock('../services/exportEntries', () => ({
 jest.mock('../storage/database', () => ({
   createDailyEntry: jest.fn(),
   createProfile: jest.fn(),
+  createWellnessQuestionHistoryEntry: jest.fn(),
   deleteAllData: jest.fn(),
   deleteDailyEntry: jest.fn(),
   getAllEntries: jest.fn(),
   getEntries: jest.fn(),
   getEntriesByDate: jest.fn(),
   getProfile: jest.fn(),
+  getWellnessQuestionHistory: jest.fn(),
   initializeStorage: jest.fn(),
   saveProfile: jest.fn(),
   updateDailyEntry: jest.fn(),
@@ -33,8 +35,14 @@ jest.mock('../lib/llmWellnessQuestions', () => ({
   requestLlmWellnessAnswer: jest.fn(),
 }));
 
-import App, { FlowBetterScreen, HistoryScreen, TodayScreen } from '../../App';
+import App, {
+  FlowBetterScreen,
+  HistoryScreen,
+  SettingsScreen,
+  TodayScreen,
+} from '../../App';
 import { requestLlmWellnessAnswer } from '../lib/llmWellnessQuestions';
+import { formatWellnessQuestionAskedAt } from '../lib/questionHistory';
 import {
   configureNotificationBehavior,
   rescheduleProfileNotifications,
@@ -42,8 +50,11 @@ import {
 } from '../services/notifications';
 import {
   createDailyEntry,
+  createWellnessQuestionHistoryEntry,
+  deleteAllData,
   getEntries,
   getProfile,
+  getWellnessQuestionHistory,
   initializeStorage,
 } from '../storage/database';
 import type { DailyEntry, Profile, TrendSummary } from '../types';
@@ -51,6 +62,14 @@ import type { DailyEntry, Profile, TrendSummary } from '../types';
 const mockRequestLlmWellnessAnswer =
   requestLlmWellnessAnswer as jest.MockedFunction<
     typeof requestLlmWellnessAnswer
+  >;
+const mockCreateWellnessQuestionHistoryEntry =
+  createWellnessQuestionHistoryEntry as jest.MockedFunction<
+    typeof createWellnessQuestionHistoryEntry
+  >;
+const mockGetWellnessQuestionHistory =
+  getWellnessQuestionHistory as jest.MockedFunction<
+    typeof getWellnessQuestionHistory
   >;
 const mockConfigureNotificationBehavior =
   configureNotificationBehavior as jest.MockedFunction<
@@ -66,6 +85,9 @@ const mockSyncNotificationsAfterEntry =
   >;
 const mockCreateDailyEntry = createDailyEntry as jest.MockedFunction<
   typeof createDailyEntry
+>;
+const mockDeleteAllData = deleteAllData as jest.MockedFunction<
+  typeof deleteAllData
 >;
 const mockGetEntries = getEntries as jest.MockedFunction<typeof getEntries>;
 const mockGetProfile = getProfile as jest.MockedFunction<typeof getProfile>;
@@ -129,6 +151,22 @@ function renderedText(renderer: ReactTestRenderer): string {
   return JSON.stringify(renderer.toJSON());
 }
 
+function renderedQuestionHistoryIds(
+  renderer: ReactTestRenderer,
+): string[] {
+  return [
+    ...new Set(
+      renderer.root
+        .findAll(
+          (node) =>
+            typeof node.props.testID === 'string' &&
+            node.props.testID.startsWith('question-history-'),
+        )
+        .map((node) => node.props.testID as string),
+    ),
+  ];
+}
+
 async function flushMicrotasks() {
   for (let index = 0; index < 8; index += 1) {
     await Promise.resolve();
@@ -160,6 +198,15 @@ function dailyEntry(
   };
 }
 
+function questionHistoryEntry(
+  id: string,
+  question: string,
+  answer: string,
+  askedAt: string,
+) {
+  return { id, question, answer, askedAt };
+}
+
 describe('Flow Better screen', () => {
   beforeAll(() => {
     jest.useFakeTimers();
@@ -183,9 +230,22 @@ describe('Flow Better screen', () => {
     mockRescheduleProfileNotifications.mockReset();
     mockSyncNotificationsAfterEntry.mockReset();
     mockCreateDailyEntry.mockReset();
+    mockCreateWellnessQuestionHistoryEntry.mockReset();
+    mockDeleteAllData.mockReset();
     mockGetEntries.mockReset();
     mockGetProfile.mockReset();
+    mockGetWellnessQuestionHistory.mockReset();
     mockInitializeStorage.mockReset();
+    mockGetWellnessQuestionHistory.mockResolvedValue([]);
+    mockDeleteAllData.mockResolvedValue(undefined);
+    mockCreateWellnessQuestionHistoryEntry.mockImplementation(
+      async (question, answer) => ({
+        id: 'saved-history',
+        question,
+        answer,
+        askedAt: '2026-07-20T19:42:00.000Z',
+      }),
+    );
   });
 
   it('keeps the Today screen focused on daily logging', () => {
@@ -675,10 +735,10 @@ describe('Flow Better screen', () => {
     alertSpy.mockRestore();
   });
 
-  it('owns the wellness note and question experience', () => {
+  it('owns the wellness note and question experience', async () => {
     let renderer: ReactTestRenderer;
 
-    act(() => {
+    await act(async () => {
       renderer = create(
         createElement(FlowBetterScreen, {
           localDate: '2026-07-16',
@@ -686,6 +746,7 @@ describe('Flow Better screen', () => {
           trends,
         }),
       );
+      await flushMicrotasks();
     });
 
     const text = renderedText(renderer!);
@@ -744,7 +805,11 @@ describe('Flow Better screen', () => {
       await Promise.resolve();
     });
 
-    expect(renderedText(renderer!)).toContain('A gentle answer.');
+    expect(
+      renderer!.root
+        .findByProps({ accessibilityLiveRegion: 'polite' })
+        .findByType(Text).props.children,
+    ).toBe('A gentle answer.');
 
     act(() => {
       renderer!.root
@@ -752,6 +817,454 @@ describe('Flow Better screen', () => {
         .props.onChangeText('What about hydration?');
     });
 
-    expect(renderedText(renderer!)).not.toContain('A gentle answer.');
+    expect(
+      renderer!.root.findAllByProps({ accessibilityLiveRegion: 'polite' }),
+    ).toHaveLength(0);
+    expect(renderedText(renderer!)).toContain('A gentle answer.');
+  });
+
+  it('loads and renders saved question history newest first', async () => {
+    const newer = questionHistoryEntry(
+      'newer',
+      'Newer question?',
+      'Newer answer.',
+      '2026-07-20T15:42:00',
+    );
+    const older = questionHistoryEntry(
+      'older',
+      'Older question?',
+      'Older answer.',
+      '2026-07-19T15:42:00',
+    );
+    mockGetWellnessQuestionHistory.mockResolvedValue([newer, older]);
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(
+        createElement(FlowBetterScreen, {
+          localDate: '2026-07-20',
+          profile,
+          trends,
+        }),
+      );
+      await flushMicrotasks();
+    });
+
+    const text = renderedText(renderer!);
+    expect(text).toContain('Question history');
+    expect(text).toContain('You asked');
+    expect(text.indexOf('Newer question?')).toBeLessThan(
+      text.indexOf('Older question?'),
+    );
+    expect(text).toContain(formatWellnessQuestionAskedAt(newer.askedAt));
+  });
+
+  it('keeps a newly saved answer when the initial history load resolves later', async () => {
+    const older = questionHistoryEntry(
+      'older',
+      'Older loaded question?',
+      'Older loaded answer.',
+      '2026-07-19T15:42:00',
+    );
+    let resolveHistory: (
+      entries: Awaited<ReturnType<typeof getWellnessQuestionHistory>>,
+    ) => void = () => undefined;
+    mockGetWellnessQuestionHistory.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveHistory = resolve;
+        }),
+    );
+    mockRequestLlmWellnessAnswer.mockResolvedValue({
+      ok: true,
+      answer: 'Newly saved answer.',
+    });
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(
+        createElement(FlowBetterScreen, {
+          localDate: '2026-07-20',
+          profile,
+          trends,
+        }),
+      );
+      await Promise.resolve();
+    });
+    act(() => {
+      renderer!.root
+        .findByType(TextInput)
+        .props.onChangeText('Newly saved question?');
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }).props.onPress();
+      await flushMicrotasks();
+    });
+
+    await act(async () => {
+      resolveHistory([older]);
+      await flushMicrotasks();
+    });
+
+    expect(renderedQuestionHistoryIds(renderer!)).toEqual([
+      'question-history-saved-history',
+      'question-history-older',
+    ]);
+  });
+
+  it('persists and prepends a successful submitted question and answer', async () => {
+    const existing = questionHistoryEntry(
+      'existing',
+      'Existing question?',
+      'Existing answer.',
+      '2026-07-19T15:42:00',
+    );
+    mockGetWellnessQuestionHistory.mockResolvedValue([existing]);
+    mockRequestLlmWellnessAnswer.mockResolvedValue({
+      ok: true,
+      answer: 'A saved answer.',
+    });
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(
+        createElement(FlowBetterScreen, {
+          localDate: '2026-07-20',
+          profile,
+          trends,
+        }),
+      );
+      await flushMicrotasks();
+    });
+    act(() => {
+      renderer!.root
+        .findByType(TextInput)
+        .props.onChangeText('  What can help?  ');
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }).props.onPress();
+      await flushMicrotasks();
+    });
+
+    expect(mockCreateWellnessQuestionHistoryEntry).toHaveBeenCalledWith(
+      'What can help?',
+      'A saved answer.',
+    );
+    const text = renderedText(renderer!);
+    expect(text).toContain('A saved answer.');
+    expect(text).toContain('What can help?');
+    expect(text).toContain('Existing question?');
+    expect(renderedQuestionHistoryIds(renderer!)).toEqual([
+      'question-history-saved-history',
+      'question-history-existing',
+    ]);
+  });
+
+  it('shows a valid answer before deferred local history persistence finishes', async () => {
+    let resolveSave: (
+      entry: Awaited<
+        ReturnType<typeof createWellnessQuestionHistoryEntry>
+      >,
+    ) => void = () => undefined;
+    mockRequestLlmWellnessAnswer.mockResolvedValue({
+      ok: true,
+      answer: 'An immediate answer.',
+    });
+    mockCreateWellnessQuestionHistoryEntry.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(
+        createElement(FlowBetterScreen, {
+          localDate: '2026-07-20',
+          profile,
+          trends,
+        }),
+      );
+      await flushMicrotasks();
+    });
+    act(() => {
+      renderer!.root
+        .findByType(TextInput)
+        .props.onChangeText('Can I see this answer now?');
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }).props.onPress();
+      await flushMicrotasks();
+    });
+
+    expect(renderedText(renderer!)).toContain('An immediate answer.');
+    expect(renderer!.root.findByType(TextInput).props.editable).toBe(true);
+    expect(
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }),
+    ).toBeTruthy();
+    expect(renderedQuestionHistoryIds(renderer!)).toEqual([]);
+
+    await act(async () => {
+      resolveSave({
+        id: 'deferred-save',
+        question: 'Can I see this answer now?',
+        answer: 'An immediate answer.',
+        askedAt: '2026-07-20T19:42:00.000Z',
+      });
+      await flushMicrotasks();
+    });
+
+    expect(renderedQuestionHistoryIds(renderer!)).toEqual([
+      'question-history-deferred-save',
+    ]);
+  });
+
+  it('does not persist a failed answer request', async () => {
+    mockRequestLlmWellnessAnswer.mockResolvedValue({
+      ok: false,
+      reason: 'request-failed',
+    });
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(
+        createElement(FlowBetterScreen, {
+          localDate: '2026-07-20',
+          profile,
+          trends,
+        }),
+      );
+      await flushMicrotasks();
+    });
+    act(() => {
+      renderer!.root.findByType(TextInput).props.onChangeText('Question?');
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }).props.onPress();
+      await flushMicrotasks();
+    });
+
+    expect(mockCreateWellnessQuestionHistoryEntry).not.toHaveBeenCalled();
+    expect(renderedText(renderer!)).toContain(
+      'Unable to answer right now. Please try again.',
+    );
+  });
+
+  it('keeps question answering usable when history loading fails', async () => {
+    mockGetWellnessQuestionHistory.mockRejectedValue(new Error('storage down'));
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(
+        createElement(FlowBetterScreen, {
+          localDate: '2026-07-20',
+          profile,
+          trends,
+        }),
+      );
+      await flushMicrotasks();
+    });
+
+    expect(renderedText(renderer!)).toContain(
+      'Question history is unavailable right now.',
+    );
+    expect(
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }),
+    ).toBeTruthy();
+  });
+
+  it('keeps the load warning visible after a successful history save', async () => {
+    mockGetWellnessQuestionHistory.mockRejectedValue(new Error('storage down'));
+    mockRequestLlmWellnessAnswer.mockResolvedValue({
+      ok: true,
+      answer: 'A newly saved answer.',
+    });
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(
+        createElement(FlowBetterScreen, {
+          localDate: '2026-07-20',
+          profile,
+          trends,
+        }),
+      );
+      await flushMicrotasks();
+    });
+    act(() => {
+      renderer!.root.findByType(TextInput).props.onChangeText('Question?');
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }).props.onPress();
+      await flushMicrotasks();
+    });
+
+    const text = renderedText(renderer!);
+    expect(text).toContain('A newly saved answer.');
+    expect(text).toContain('Question history is unavailable right now.');
+    expect(
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }),
+    ).toBeTruthy();
+  });
+
+  it('keeps a valid answer visible when history saving fails', async () => {
+    mockRequestLlmWellnessAnswer.mockResolvedValue({
+      ok: true,
+      answer: 'A visible answer.',
+    });
+    mockCreateWellnessQuestionHistoryEntry.mockRejectedValue(
+      new Error('storage down'),
+    );
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(
+        createElement(FlowBetterScreen, {
+          localDate: '2026-07-20',
+          profile,
+          trends,
+        }),
+      );
+      await flushMicrotasks();
+    });
+    act(() => {
+      renderer!.root.findByType(TextInput).props.onChangeText('Question?');
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }).props.onPress();
+      await flushMicrotasks();
+    });
+
+    const text = renderedText(renderer!);
+    expect(text).toContain('A visible answer.');
+    expect(text).toContain(
+      'Answer received, but it could not be added to question history.',
+    );
+  });
+
+  it('explains local question history retention in Settings', () => {
+    let renderer: ReactTestRenderer;
+
+    act(() => {
+      renderer = create(
+        createElement(SettingsScreen, {
+          profile,
+          onSave: async () => undefined,
+          onExportData: async () => undefined,
+          onDeleteData: () => undefined,
+        }),
+      );
+    });
+
+    expect(renderedText(renderer!)).toContain(
+      'Successful questions and answers stay on this device until you delete local data.',
+    );
+  });
+
+  it('includes question history in the delete local data confirmation', async () => {
+    mockInitializeStorage.mockResolvedValue(undefined);
+    mockConfigureNotificationBehavior.mockResolvedValue(undefined);
+    mockGetProfile.mockResolvedValue({
+      ...profile,
+      dailyOpenLoveShownDate: '2026-07-17',
+    });
+    mockGetEntries.mockResolvedValue([]);
+    mockRescheduleProfileNotifications.mockResolvedValue(true);
+    const alertSpy = jest
+      .spyOn(Alert, 'alert')
+      .mockImplementation(() => undefined);
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(createElement(App));
+      await flushMicrotasks();
+    });
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Open Settings tab',
+      }).props.onPress();
+    });
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Delete local data',
+      }).props.onPress();
+    });
+
+    expect(alertSpy).toHaveBeenCalledWith(
+      'Delete local data?',
+      expect.stringContaining('question history'),
+      expect.any(Array),
+    );
+    alertSpy.mockRestore();
+  });
+
+  it('does not recreate question history when a deferred answer resolves after local data deletion', async () => {
+    let resolveAnswer: (
+      result: Awaited<ReturnType<typeof requestLlmWellnessAnswer>>,
+    ) => void = () => undefined;
+    mockRequestLlmWellnessAnswer.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveAnswer = resolve;
+        }),
+    );
+    mockInitializeStorage.mockResolvedValue(undefined);
+    mockConfigureNotificationBehavior.mockResolvedValue(undefined);
+    mockGetProfile.mockResolvedValue({
+      ...profile,
+      llmWellnessNotesEnabled: true,
+      llmWellnessNoteEndpoint: 'https://example.ngrok.app/wellness-note',
+      llmWellnessNoteAccessToken: 'test-token',
+      dailyOpenLoveShownDate: '2026-07-17',
+    });
+    mockGetEntries.mockResolvedValue([]);
+    mockRescheduleProfileNotifications.mockResolvedValue(true);
+    const alertSpy = jest.spyOn(Alert, 'alert').mockImplementation(
+      (_title, _message, buttons) => {
+        buttons?.find((button) => button.style === 'destructive')?.onPress?.();
+      },
+    );
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(createElement(App));
+      await flushMicrotasks();
+    });
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Open Flow better ✨ tab',
+      }).props.onPress();
+    });
+    act(() => {
+      renderer!.root
+        .findByType(TextInput)
+        .props.onChangeText('Will this answer stay deleted?');
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }).props.onPress();
+      await Promise.resolve();
+    });
+    act(() => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Open Settings tab',
+      }).props.onPress();
+    });
+    await act(async () => {
+      renderer!.root.findByProps({
+        accessibilityLabel: 'Delete local data',
+      }).props.onPress();
+      await flushMicrotasks();
+    });
+
+    expect(mockDeleteAllData).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveAnswer({ ok: true, answer: 'A late sensitive answer.' });
+      await flushMicrotasks();
+    });
+
+    expect(mockCreateWellnessQuestionHistoryEntry).not.toHaveBeenCalled();
+    alertSpy.mockRestore();
   });
 });

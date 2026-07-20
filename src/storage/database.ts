@@ -8,7 +8,9 @@ import type {
   NotificationType,
   Profile,
   StoolType,
+  WellnessQuestionHistoryEntry,
 } from '../types';
+import { createWellnessQuestionHistoryValue } from '../lib/questionHistory';
 
 const PROFILE_ID = 'local-profile';
 let entryIdCounter = 0;
@@ -53,6 +55,13 @@ type NotificationRecordRow = {
   notification_id: string;
   status: NotificationRecord['status'];
   created_at: string;
+};
+
+type WellnessQuestionHistoryRow = {
+  id: string;
+  question: string;
+  answer: string;
+  asked_at: string;
 };
 
 const schema = `
@@ -100,6 +109,16 @@ CREATE TABLE IF NOT EXISTS notification_records (
 
 CREATE UNIQUE INDEX IF NOT EXISTS notification_records_date_type_idx
 ON notification_records(local_date, type);
+
+CREATE TABLE IF NOT EXISTS wellness_question_history (
+  id TEXT PRIMARY KEY NOT NULL,
+  question TEXT NOT NULL,
+  answer TEXT NOT NULL,
+  asked_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS wellness_question_history_asked_at_idx
+ON wellness_question_history(asked_at DESC, id DESC);
 
 CREATE INDEX IF NOT EXISTS daily_entries_date_time_idx
 ON daily_entries(local_date, checked_in_at, id);
@@ -383,6 +402,17 @@ function mapEntry(row: DailyEntryRow): DailyEntry {
   };
 }
 
+function mapWellnessQuestionHistoryEntry(
+  row: WellnessQuestionHistoryRow,
+): WellnessQuestionHistoryEntry {
+  return {
+    id: row.id,
+    question: row.question,
+    answer: row.answer,
+    askedAt: row.asked_at,
+  };
+}
+
 function mapNotificationRecord(row: NotificationRecordRow): NotificationRecord {
   return {
     id: row.id,
@@ -654,6 +684,34 @@ export async function deleteDailyEntry(id: string): Promise<boolean> {
   return result.changes > 0;
 }
 
+export async function getWellnessQuestionHistory(): Promise<
+  WellnessQuestionHistoryEntry[]
+> {
+  const db = await getDatabase();
+  const rows = await db.getAllAsync<WellnessQuestionHistoryRow>(
+    `SELECT * FROM wellness_question_history
+     ORDER BY asked_at DESC, id DESC`,
+  );
+
+  return rows.map(mapWellnessQuestionHistoryEntry);
+}
+
+export async function createWellnessQuestionHistoryEntry(
+  question: string,
+  answer: string,
+): Promise<WellnessQuestionHistoryEntry> {
+  const entry = createWellnessQuestionHistoryValue(question, answer);
+  const db = await getDatabase();
+
+  await db.runAsync(
+    `INSERT INTO wellness_question_history (id, question, answer, asked_at)
+     VALUES (?, ?, ?, ?)`,
+    [entry.id, entry.question, entry.answer, entry.askedAt],
+  );
+
+  return entry;
+}
+
 export async function getNotificationRecords(): Promise<NotificationRecord[]> {
   const db = await getDatabase();
   const rows = await db.getAllAsync<NotificationRecordRow>(
@@ -726,6 +784,7 @@ export async function deleteAllData(): Promise<void> {
   const db = await getDatabase();
 
   await db.execAsync(`
+    DELETE FROM wellness_question_history;
     DELETE FROM notification_records;
     DELETE FROM daily_entries;
     DELETE FROM profile;
