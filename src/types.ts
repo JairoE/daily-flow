@@ -14,6 +14,13 @@ export type Profile = {
   updatedAt: string;
 };
 
+export type WellnessQuestionHistoryEntry = {
+  id: string;
+  question: string;
+  answer: string;
+  askedAt: string;
+};
+
 export type DailyEntry = {
   id: string;
   localDate: string;
