@@ -29,11 +29,13 @@ import { exportEntriesCsv } from './src/services/exportEntries';
 import {
   createProfile,
   createDailyEntry,
+  createWellnessQuestionHistoryEntry,
   deleteAllData,
   deleteDailyEntry,
   getAllEntries,
   getEntries,
   getProfile,
+  getWellnessQuestionHistory,
   initializeStorage,
   saveProfile,
   updateDailyEntry,
@@ -75,6 +77,7 @@ import {
   MAX_WELLNESS_QUESTION_CHARS,
   requestLlmWellnessAnswer,
 } from './src/lib/llmWellnessQuestions';
+import { formatWellnessQuestionAskedAt } from './src/lib/questionHistory';
 import {
   flowBetterTab,
   primaryTabs,
@@ -91,6 +94,7 @@ import type {
   StoolType,
   TabKey,
   TrendSummary,
+  WellnessQuestionHistoryEntry,
 } from './src/types';
 
 const entryLoadLimit = 90;
@@ -406,7 +410,7 @@ export default function App() {
   function handleDeleteData() {
     Alert.alert(
       'Delete local data?',
-      'This removes your profile, check-ins, and reminder records from this device.',
+      'This removes your profile, check-ins, question history, and reminder records from this device.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -1163,6 +1167,10 @@ export function FlowBetterScreen({
   const [answer, setAnswer] = useState('');
   const [questionError, setQuestionError] = useState('');
   const [asking, setAsking] = useState(false);
+  const [questionHistory, setQuestionHistory] = useState<
+    WellnessQuestionHistoryEntry[]
+  >([]);
+  const [historyError, setHistoryError] = useState('');
 
   useEffect(() => {
     let cancelled = false;
@@ -1195,6 +1203,27 @@ export function FlowBetterScreen({
     trends,
   ]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    getWellnessQuestionHistory()
+      .then((entries) => {
+        if (!cancelled) {
+          setQuestionHistory(entries);
+          setHistoryError('');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHistoryError('Question history is unavailable right now.');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   async function handleAskQuestion() {
     const submittedQuestion = question.trim();
 
@@ -1216,6 +1245,23 @@ export function FlowBetterScreen({
 
       if (result.ok) {
         setAnswer(result.answer);
+
+        try {
+          const savedEntry = await createWellnessQuestionHistoryEntry(
+            submittedQuestion,
+            result.answer,
+          );
+          setQuestionHistory((current) => [
+            savedEntry,
+            ...current.filter((entry) => entry.id !== savedEntry.id),
+          ]);
+          setHistoryError('');
+        } catch {
+          setHistoryError(
+            'Answer received, but it could not be added to question history.',
+          );
+        }
+
         return;
       }
 
@@ -1305,6 +1351,38 @@ export function FlowBetterScreen({
             <Text style={styles.bodyText}>{answer}</Text>
           </View>
         ) : null}
+
+        <View style={styles.questionHistorySection}>
+          <Text style={styles.sectionLabel}>Question history</Text>
+
+          {historyError ? (
+            <Text accessibilityLiveRegion="polite" style={styles.errorText}>
+              {historyError}
+            </Text>
+          ) : null}
+
+          {questionHistory.length === 0 ? (
+            <Text style={styles.bodyText}>
+              Successful answers you ask for will appear here on this device.
+            </Text>
+          ) : (
+            questionHistory.map((entry) => (
+              <View
+                key={entry.id}
+                style={styles.questionHistoryCard}
+                testID={`question-history-${entry.id}`}
+              >
+                <Text style={styles.questionHistoryTime}>
+                  {formatWellnessQuestionAskedAt(entry.askedAt)}
+                </Text>
+                <Text style={styles.questionHistoryLabel}>You asked</Text>
+                <Text style={styles.bodyText}>{entry.question}</Text>
+                <Text style={styles.questionHistoryLabel}>Answer</Text>
+                <Text style={styles.bodyText}>{entry.answer}</Text>
+              </View>
+            ))
+          )}
+        </View>
       </View>
     </View>
   );
@@ -2499,7 +2577,7 @@ function EmptyChart() {
   return <Text style={styles.chartEmptyText}>More check-ins will fill this in.</Text>;
 }
 
-function SettingsScreen({
+export function SettingsScreen({
   profile,
   onSave,
   onExportData,
@@ -2630,6 +2708,8 @@ function SettingsScreen({
           Data is stored locally on this device. Private reminders hide bowel
           movement wording from notification text. Daily Flow Pro+ sends summary
           counts and any question you choose to submit to your configured proxy.
+          Successful questions and answers stay on this device until you delete
+          local data.
         </Text>
       </View>
 
@@ -3226,6 +3306,31 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     marginTop: 18,
     paddingTop: 16,
+  },
+  questionHistorySection: {
+    borderTopColor: palette.border,
+    borderTopWidth: 1,
+    gap: 12,
+    marginTop: 20,
+    paddingTop: 18,
+  },
+  questionHistoryCard: {
+    backgroundColor: palette.tile,
+    borderRadius: 18,
+    gap: 6,
+    padding: 14,
+  },
+  questionHistoryTime: {
+    color: palette.softText,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  questionHistoryLabel: {
+    color: palette.purple,
+    fontSize: 13,
+    fontWeight: '900',
+    marginTop: 4,
+    textTransform: 'uppercase',
   },
   kicker: {
     color: palette.purple,
