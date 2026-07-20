@@ -71,6 +71,8 @@ npm test
   available, with a local daily fallback if generation fails.
 - Ask a gastrointestinal wellness question and receive a concise,
   non-diagnostic answer from the configured LLM.
+- Keep every successful question and answer in a local, newest-first history
+  until `Delete local data` is used.
 - Send only summary counts plus the question the user explicitly submits. The
   app does not send names, exact dates, free-text check-in notes, or raw history.
 
@@ -89,6 +91,8 @@ npm test
 - Data stays local by default.
 - Native builds use SQLite through `expo-sqlite`.
 - Web builds use `localStorage`.
+- Successful Flow Better questions and answers stay in the same local storage,
+  are not included in CSV exports, and are cleared by `Delete local data`.
 - CSV export writes stable migration columns for all local check-ins and opens
   the device share sheet on iOS and Android.
 - Existing Yes/No-only entries are still readable and count toward frequency and check-in metrics.
