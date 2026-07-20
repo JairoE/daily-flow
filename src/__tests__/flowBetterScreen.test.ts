@@ -960,6 +960,66 @@ describe('Flow Better screen', () => {
     ]);
   });
 
+  it('shows a valid answer before deferred local history persistence finishes', async () => {
+    let resolveSave: (
+      entry: Awaited<
+        ReturnType<typeof createWellnessQuestionHistoryEntry>
+      >,
+    ) => void = () => undefined;
+    mockRequestLlmWellnessAnswer.mockResolvedValue({
+      ok: true,
+      answer: 'An immediate answer.',
+    });
+    mockCreateWellnessQuestionHistoryEntry.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    let renderer: ReactTestRenderer;
+
+    await act(async () => {
+      renderer = create(
+        createElement(FlowBetterScreen, {
+          localDate: '2026-07-20',
+          profile,
+          trends,
+        }),
+      );
+      await flushMicrotasks();
+    });
+    act(() => {
+      renderer!.root
+        .findByType(TextInput)
+        .props.onChangeText('Can I see this answer now?');
+    });
+    await act(async () => {
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }).props.onPress();
+      await flushMicrotasks();
+    });
+
+    expect(renderedText(renderer!)).toContain('An immediate answer.');
+    expect(renderer!.root.findByType(TextInput).props.editable).toBe(true);
+    expect(
+      renderer!.root.findByProps({ accessibilityLabel: 'Ask' }),
+    ).toBeTruthy();
+    expect(renderedQuestionHistoryIds(renderer!)).toEqual([]);
+
+    await act(async () => {
+      resolveSave({
+        id: 'deferred-save',
+        question: 'Can I see this answer now?',
+        answer: 'An immediate answer.',
+        askedAt: '2026-07-20T19:42:00.000Z',
+      });
+      await flushMicrotasks();
+    });
+
+    expect(renderedQuestionHistoryIds(renderer!)).toEqual([
+      'question-history-deferred-save',
+    ]);
+  });
+
   it('does not persist a failed answer request', async () => {
     mockRequestLlmWellnessAnswer.mockResolvedValue({
       ok: false,

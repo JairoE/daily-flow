@@ -429,11 +429,16 @@ export default function App() {
 
   async function clearLocalData() {
     await questionHistoryWriteCoordinator.invalidateAndDrain();
-    await deleteAllData();
-    setProfile(null);
-    setEntries([]);
-    setActiveTab('today');
-    setNotice('');
+
+    try {
+      await deleteAllData();
+      setProfile(null);
+      setEntries([]);
+      setActiveTab('today');
+      setNotice('');
+    } finally {
+      questionHistoryWriteCoordinator.reopen();
+    }
   }
 
   function handleDeleteData() {
@@ -1284,6 +1289,8 @@ export function FlowBetterScreen({
     setAnswer('');
     setQuestionError('');
 
+    let answerDisplayedBeforePersistence = false;
+
     try {
       const result = await requestLlmWellnessAnswer(
         profile,
@@ -1292,6 +1299,16 @@ export function FlowBetterScreen({
       );
 
       if (result.ok) {
+        if (
+          !activeHistoryWriteCoordinator.isSubmissionCurrent(submissionToken)
+        ) {
+          return;
+        }
+
+        setAnswer(result.answer);
+        setAsking(false);
+        answerDisplayedBeforePersistence = true;
+
         const writeResult = await activeHistoryWriteCoordinator.enqueueWrite(
           submissionToken,
           () =>
@@ -1304,8 +1321,6 @@ export function FlowBetterScreen({
         if (writeResult.status === 'stale') {
           return;
         }
-
-        setAnswer(result.answer);
 
         if (writeResult.status === 'written') {
           const savedEntry = writeResult.value;
@@ -1332,7 +1347,9 @@ export function FlowBetterScreen({
         setQuestionError('Unable to answer right now. Please try again.');
       }
     } finally {
-      setAsking(false);
+      if (!answerDisplayedBeforePersistence) {
+        setAsking(false);
+      }
     }
   }
 
