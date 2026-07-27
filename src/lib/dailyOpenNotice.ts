@@ -16,11 +16,11 @@ export function getDailyOpenLoveNotice(
   const profileName = profile.displayName.trim() || 'Friend';
 
   return {
-    message: `I love you ${profileName}`,
+    message: `Glad to see you ${profileName}`,
     shownDate: today,
   };
 }
 
 export function isDailyOpenLoveNoticeMessage(message: string): boolean {
-  return message.startsWith('I love you ');
+  return message.startsWith('Glad to see you ');
 }

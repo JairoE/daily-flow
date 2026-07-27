@@ -23,7 +23,7 @@ function profile(overrides: Partial<Profile> = {}): Profile {
 describe('daily open notice', () => {
   it('builds the love message the first time a profile opens the app each day', () => {
     expect(getDailyOpenLoveNotice(profile(), '2026-07-10')).toEqual({
-      message: 'I love you Jairo',
+      message: 'Glad to see you Jairo',
       shownDate: '2026-07-10',
     });
   });
@@ -44,7 +44,7 @@ describe('daily open notice', () => {
         '2026-07-11',
       ),
     ).toEqual({
-      message: 'I love you Jairo',
+      message: 'Glad to see you Jairo',
       shownDate: '2026-07-11',
     });
   });
