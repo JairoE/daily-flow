@@ -1,4 +1,7 @@
-import { getDailyOpenLoveNotice } from '../lib/dailyOpenNotice';
+import {
+  getDailyOpenLoveNotice,
+  prepareDailyOpenLoveNotice,
+} from '../lib/dailyOpenNotice';
 import type { Profile } from '../types';
 
 function profile(overrides: Partial<Profile> = {}): Profile {
@@ -21,6 +24,29 @@ function profile(overrides: Partial<Profile> = {}): Profile {
 }
 
 describe('daily open notice', () => {
+  it('prepares a new profile to show the welcome notice during signup', () => {
+    expect(prepareDailyOpenLoveNotice(profile(), '2026-07-10')).toEqual({
+      notice: {
+        message: 'Glad to see you Jairo',
+        shownDate: '2026-07-10',
+      },
+      profile: profile({ dailyOpenLoveShownDate: '2026-07-10' }),
+    });
+  });
+
+  it('does not change a profile whose welcome notice was already shown today', () => {
+    const shownProfile = profile({
+      dailyOpenLoveShownDate: '2026-07-10',
+    });
+
+    expect(
+      prepareDailyOpenLoveNotice(shownProfile, '2026-07-10'),
+    ).toEqual({
+      notice: null,
+      profile: shownProfile,
+    });
+  });
+
   it('builds the love message the first time a profile opens the app each day', () => {
     expect(getDailyOpenLoveNotice(profile(), '2026-07-10')).toEqual({
       message: 'Glad to see you Jairo',

@@ -16,6 +16,7 @@ import {
   Switch,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 
@@ -63,8 +64,8 @@ import {
 } from './src/lib/dailyEntries';
 import { CalendarEntryRing } from './src/components/CalendarEntryRing';
 import {
-  getDailyOpenLoveNotice,
   isDailyOpenLoveNoticeMessage,
+  prepareDailyOpenLoveNotice,
 } from './src/lib/dailyOpenNotice';
 import {
   buildLlmWellnessNotePayload,
@@ -90,6 +91,7 @@ import {
   primaryTabs,
   resolveAccessibleTab,
 } from './src/lib/navigation';
+import { isDesktopLayout } from './src/lib/responsiveLayout';
 import { getFallbackWellnessNote } from './src/lib/wellnessNotes';
 import type {
   DailyEntry,
@@ -152,6 +154,7 @@ function mergeWellnessQuestionHistoryEntries(
 }
 
 export default function App() {
+  const { width: windowWidth } = useWindowDimensions();
   const [ready, setReady] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [entries, setEntries] = useState<DailyEntry[]>([]);
@@ -168,6 +171,7 @@ export default function App() {
 
   const questionHistoryWriteCoordinator =
     questionHistoryWriteCoordinatorRef.current;
+  const desktopLayout = isDesktopLayout(windowWidth);
 
   const today = getLocalDateKey();
   const includeTodayAsMissed = profile
@@ -220,15 +224,13 @@ export default function App() {
       await configureNotificationBehavior();
       const storedProfile = await getProfile();
       const storedEntries = await getEntries(entryLoadLimit);
-      const dailyOpenNotice = storedProfile
-        ? getDailyOpenLoveNotice(storedProfile, today)
+      const preparedDailyOpenNotice = storedProfile
+        ? prepareDailyOpenLoveNotice(storedProfile, today)
         : null;
+      const dailyOpenNotice = preparedDailyOpenNotice?.notice ?? null;
       const nextProfile =
-        storedProfile && dailyOpenNotice
-          ? await saveProfile({
-              ...storedProfile,
-              dailyOpenLoveShownDate: dailyOpenNotice.shownDate,
-            })
+        preparedDailyOpenNotice && dailyOpenNotice
+          ? await saveProfile(preparedDailyOpenNotice.profile)
           : storedProfile;
 
       if (nextProfile?.remindersEnabled) {
@@ -280,16 +282,20 @@ export default function App() {
   }
 
   async function handleProfileCreated(nextProfile: Profile) {
-    const savedProfile = await saveProfile(nextProfile);
+    const preparedDailyOpenNotice = prepareDailyOpenLoveNotice(
+      nextProfile,
+      today,
+    );
+    const savedProfile = await saveProfile(preparedDailyOpenNotice.profile);
     setProfile(savedProfile);
 
     if (savedProfile.remindersEnabled) {
-      const scheduled = await rescheduleProfileNotifications(savedProfile);
-      setNotice(
-        scheduled
-          ? 'Reminders are set.'
-          : 'Reminder preference saved. Notifications are available on iOS and Android devices.',
-      );
+      await rescheduleProfileNotifications(savedProfile);
+    }
+
+    if (preparedDailyOpenNotice.notice) {
+      setNotice(preparedDailyOpenNotice.notice.message);
+      setNoticeKey((current) => current + 1);
     }
   }
 
@@ -493,7 +499,9 @@ export default function App() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <StatusBar style="dark" />
-      <View style={styles.appShell}>
+      <View
+        style={[styles.appShell, desktopLayout && styles.desktopAppShell]}
+      >
         <View style={styles.header}>
           <Text style={styles.appName}>
             {activeTab === 'trends'
@@ -797,6 +805,7 @@ function OnboardingScreen({
   notice: string;
   onComplete: (profile: Profile) => Promise<void>;
 }) {
+  const { width: windowWidth } = useWindowDimensions();
   const [displayName, setDisplayName] = useState('');
   const [checkInTime, setCheckInTime] = useState('20:00');
   const [remindersEnabled, setRemindersEnabled] = useState(true);
@@ -839,7 +848,10 @@ function OnboardingScreen({
         style={styles.onboardingShell}
       >
         <ScrollView
-          contentContainerStyle={styles.onboardingContent}
+          contentContainerStyle={[
+            styles.onboardingContent,
+            isDesktopLayout(windowWidth) && styles.desktopOnboardingContent,
+          ]}
           keyboardShouldPersistTaps="handled"
         >
           <View style={styles.brandBlock}>
@@ -3220,6 +3232,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingTop: 12,
   },
+  desktopAppShell: {
+    alignSelf: 'center',
+    maxWidth: 1040,
+    paddingHorizontal: 32,
+    paddingTop: 24,
+    width: '100%',
+  },
   header: {
     alignItems: 'center',
     paddingBottom: 14,
@@ -3326,6 +3345,12 @@ const styles = StyleSheet.create({
   onboardingContent: {
     padding: 22,
     paddingBottom: 34,
+  },
+  desktopOnboardingContent: {
+    alignSelf: 'center',
+    maxWidth: 720,
+    paddingTop: 48,
+    width: '100%',
   },
   brandBlock: {
     marginBottom: 22,
