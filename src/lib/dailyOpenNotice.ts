@@ -5,6 +5,11 @@ export type DailyOpenLoveNotice = {
   shownDate: string;
 };
 
+export type PreparedDailyOpenLoveNotice = {
+  notice: DailyOpenLoveNotice | null;
+  profile: Profile;
+};
+
 export function getDailyOpenLoveNotice(
   profile: Profile,
   today: string,
@@ -18,6 +23,23 @@ export function getDailyOpenLoveNotice(
   return {
     message: `Glad to see you ${profileName}`,
     shownDate: today,
+  };
+}
+
+export function prepareDailyOpenLoveNotice(
+  profile: Profile,
+  today: string,
+): PreparedDailyOpenLoveNotice {
+  const notice = getDailyOpenLoveNotice(profile, today);
+
+  return {
+    notice,
+    profile: notice
+      ? {
+          ...profile,
+          dailyOpenLoveShownDate: notice.shownDate,
+        }
+      : profile,
   };
 }
 
